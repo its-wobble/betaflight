@@ -61,6 +61,7 @@
 
 #include "flight/failsafe.h"
 #include "flight/autopilot.h"
+#include "flight/bank_mode.h"
 #include "flight/launch_wing.h"
 #include "flight/gps_rescue.h"
 #include "flight/alt_hold.h"
@@ -1034,7 +1035,29 @@ void processRxModes(timeUs_t currentTimeUs)
     }
 
     bool canUseHorizonMode = true;
-    if ((IS_RC_MODE_ACTIVE(BOXANGLE)
+
+    // BANK is an alternative attitude mode, like ANGLE and HORIZON, and can be switched in flight.
+    // Failsafe, GPS rescue, altitude hold and position hold take priority over it, and while it is
+    // active it takes priority over the ANGLE and HORIZON switches. Those flags are from the previous cycle.
+    // TODO(bank): decide how BANK should interact with ALT_HOLD/POS_HOLD, HEADFREE and ARMING.
+    bool bankModeRequested = false;
+#ifdef USE_BANK_MODE
+    bankModeRequested = IS_RC_MODE_ACTIVE(BOXBANK)
+        && sensors(SENSOR_ACC)
+        && !isFixedWing()
+        && !failsafeIsActive()
+        && !FLIGHT_MODE(GPS_RESCUE_MODE | ALT_HOLD_MODE | POS_HOLD_MODE);
+    if (bankModeRequested) {
+        if (!FLIGHT_MODE(BANK_MODE)) {
+            ENABLE_FLIGHT_MODE(BANK_MODE);
+        }
+    } else {
+        DISABLE_FLIGHT_MODE(BANK_MODE);
+    }
+    bankModeUpdate(currentTimeUs);
+#endif
+
+    if (((IS_RC_MODE_ACTIVE(BOXANGLE) && !bankModeRequested)
         || failsafeIsActive()
 #ifdef USE_ALTITUDE_HOLD
         || FLIGHT_MODE(ALT_HOLD_MODE)
@@ -1242,7 +1265,7 @@ void processRxModes(timeUs_t currentTimeUs)
     }
 #endif
 
-    if (IS_RC_MODE_ACTIVE(BOXHORIZON) && canUseHorizonMode && sensors(SENSOR_ACC)) {
+    if (IS_RC_MODE_ACTIVE(BOXHORIZON) && canUseHorizonMode && !bankModeRequested && sensors(SENSOR_ACC)) {
         DISABLE_FLIGHT_MODE(ANGLE_MODE);
         if (!FLIGHT_MODE(HORIZON_MODE)) {
             ENABLE_FLIGHT_MODE(HORIZON_MODE);
@@ -1261,7 +1284,7 @@ void processRxModes(timeUs_t currentTimeUs)
     }
 #endif
 
-    if (FLIGHT_MODE(ANGLE_MODE | ALT_HOLD_MODE | POS_HOLD_MODE | HORIZON_MODE)) {
+    if (FLIGHT_MODE(ANGLE_MODE | ALT_HOLD_MODE | POS_HOLD_MODE | HORIZON_MODE | BANK_MODE)) {
         LED1_ON;
         // increase frequency of attitude task to reduce drift when in angle or horizon mode
         rescheduleTask(TASK_ATTITUDE, TASK_PERIOD_HZ(acc.sampleRateHz / (float)imuConfig()->imu_process_denom));

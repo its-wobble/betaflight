@@ -329,6 +329,7 @@ STATIC_UNIT_TESTED void imuUpdateEulerAngles(void)
 {
     quaternionProducts buffer;
 
+    // TODO(bank): BANK_MODE needs a travel heading and head-check yaw offset kept separate from the nose attitude
     if (FLIGHT_MODE(HEADFREE_MODE)) {
        imuQuaternionComputeProducts(&headfree, &buffer);
 

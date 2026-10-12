@@ -225,6 +225,7 @@ static void calculateThrottleAndCurrentMotorEndpoints(timeUs_t currentTimeUs)
             pidResetIterm();
         }
     } else {
+        // TODO(bank): BANK_MODE computes collective as (m*g + Fz) / (cos(theta) * cos(phi)) instead of using the stick
         throttle = rcCommand[THROTTLE] - PWM_RANGE_MIN + throttleAngleCorrection;
         currentThrottleInputRange = PWM_RANGE;
 #ifdef USE_DYN_IDLE

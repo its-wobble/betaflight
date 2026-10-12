@@ -743,6 +743,7 @@ FAST_CODE_NOINLINE void updateRcCommands(void)
             }
         }
     }
+    // TODO(bank): when BANK_MODE is active, turn the sticks into force-vector setpoints here (see flight/bank_mode.c)
     if (FLIGHT_MODE(HEADFREE_MODE)) {
         static vector3_t rcCommandBuff;
 

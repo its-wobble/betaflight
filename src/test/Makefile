@@ -66,6 +66,18 @@ atomic_unittest_SRC := \
 		$(USER_DIR)/build/atomic.c \
 		$(TEST_DIR)/atomic_unittest_c.c
 
+bank_unittest_SRC := \
+		$(USER_DIR)/flight/bank_mode.c \
+		$(USER_DIR)/pg/bank_mode.c \
+		$(USER_DIR)/pg/pg.c \
+		$(USER_DIR)/common/crc.c \
+		$(USER_DIR)/common/streambuf.c \
+		$(USER_DIR)/fc/runtime_config.c
+
+bank_unittest_DEFINES := \
+		USE_ACC= \
+		USE_BANK_MODE=
+
 beeper_unittest_SRC := \
 		$(USER_DIR)/io/beeper.c
 

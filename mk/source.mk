@@ -3,6 +3,7 @@ PG_SRC = \
             pg/alt_hold_multirotor.c \
             pg/alt_hold_wing.c \
             pg/autopilot.c \
+            pg/bank_mode.c \
             pg/beeper.c \
             pg/beeper_dev.c \
             pg/board.c \
@@ -172,6 +173,7 @@ COMMON_SRC = \
             flight/autopilot_wing.c \
             flight/dyn_notch_filter.c \
             flight/failsafe.c \
+            flight/bank_mode.c \
             flight/flight_plan_capture.c \
             flight/flight_plan_nav.c \
             flight/gps_rescue_multirotor.c \

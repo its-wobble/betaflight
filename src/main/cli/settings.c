@@ -85,6 +85,7 @@
 #include "pg/adc.h"
 #include "pg/alt_hold.h"
 #include "pg/autopilot.h"
+#include "pg/bank_mode.h"
 #include "pg/beeper.h"
 #include "pg/beeper_dev.h"
 #include "pg/bus_i2c.h"
@@ -1236,6 +1237,11 @@ const clivalue_t valueTable[] = {
     { "poshold_opticalflow_max_range", VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 50, 1000 }, PG_POSHOLD_CONFIG, offsetof(posHoldConfig_t, opticalflowMaxRange) },
 #endif // !USE_WING
 #endif // USE_POSITION_HOLD
+
+#ifdef USE_BANK_MODE
+// PG_BANK_MODE_CONFIG
+    { "bank_thrust_to_weight",      VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 110, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, thrustToWeight) },
+#endif // USE_BANK_MODE
 
 #if defined(USE_WING) && defined(USE_LAUNCH_WING)
 // PG_LAUNCH_WING_CONFIG

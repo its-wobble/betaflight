@@ -646,6 +646,7 @@ STATIC_UNIT_TESTED FAST_CODE_NOINLINE float pidLevel(int axis, const pidProfile_
     // this filter runs at ATTITUDE_CUTOFF_HZ, currently 50hz, so GPS roll may be a bit steppy
     angleRate = pt3FilterApply(&pidRuntime.attitudeFilter[axis], angleRate);
 
+    // TODO(bank): BANK_MODE should drive the angle targets here (theta from pitch force, phi from roll bank)
     if (FLIGHT_MODE(ANGLE_MODE| GPS_RESCUE_MODE | POS_HOLD_MODE | LAUNCH_MODE)) {
         currentPidSetpoint = angleRate;
     } else {
