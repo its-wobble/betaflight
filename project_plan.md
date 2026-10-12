@@ -6,7 +6,7 @@ Goal: fly a drone like a car on a banked track. The three control axes are coupl
 
 | Stick | Channel | Function |
 |---|---|---|
-| Left U/D | throttle | **vertical force/acceleration command**, not raw throttle. Centre = thrust balances weight (hover / no vertical acceleration), using a thrust-to-weight ratio (estimated or user-set); up/down adds/removes net vertical force |
+| Left U/D | throttle | **vertical lift command**, not raw throttle. Bottom = no lift at all (free fall, and the pose for arming), centre = 1 g (thrust balances weight), top = maximum thrust entirely as lift, whatever multiple of the weight that is. Uses a user-set thrust-to-weight ratio |
 | Left L/R | yaw | **head check**: yaw the nose away from the direction of travel *without* changing the direction of travel; springs back to neutral when the stick centres |
 | Right U/D | pitch | **forward/backward force command**, coupled pitch + collective: pitching the craft forward also raises collective thrust so the horizontal force component grows while the vertical component is unchanged |
 | Right L/R | roll | **bank** left/right = turn in the horizontal plane |
@@ -14,7 +14,7 @@ Goal: fly a drone like a car on a banked track. The three control axes are coupl
 Design decisions so far:
 - **Attitude only** (gyro/ACC); no GPS or baro required.
 - Keep an internal virtual *travel heading* (a course reference, similar in spirit to headfree). Nose yaw = travel heading + head-check offset; the head-check offset must not affect the velocity direction.
-- **Force-vector control (decoupled axes)**: the sticks command a net force vector, and the mixer of attitude + collective realises it. Required collective for tilt angle θ (pitch) and φ (bank) is T = (m·g + F_z) / (cos θ · cos φ), so with left U/D at neutral, moving right U/D from centre to forward pitches the craft and increases throttle by 1/cos θ, giving forward force without changing vertical force. Left U/D adds the vertical term F_z. Collective is therefore always computed from the commanded tilt, never taken directly from the stick.
+- **Force-vector control (decoupled axes)**: the sticks command a net force vector, and the mixer of attitude + collective realises it. Required collective for tilt angle θ (pitch) and φ (bank) is T = (m·g + F_z) / (cos θ · cos φ), so with the left stick at the hover position, moving right U/D from centre to forward pitches the craft and increases throttle by 1/cos θ, giving forward force without changing vertical force. The left stick sets the vertical term F_z, with the bottom of the stick giving no lift. Arming is with the left stick at the bottom and the right stick centred (no tilt). Collective is therefore always computed from the commanded tilt, never taken directly from the stick.
 - **Coordinated banked turn**: the roll stick commands bank angle φ; the mode generates the matching yaw rate so that tan φ = v·ω / g, and applies the same 1/cos tilt compensation so the vertical force stays balanced — the forces should model a "perfect bank".
 
 Open questions (decide with the user before implementing): source of thrust-to-weight (CLI setting vs estimate); mapping from right U/D to forward force / tilt angle (and reverse behaviour), and from left U/D to vertical force (scaling, deadband around neutral), thrust saturation limits when tilt compensation demands more than max throttle; max bank angle and head-check range / return rate; interaction with arming, failsafe and ANGLE/HORIZON/HEADFREE/ALT_HOLD/POS_HOLD priority.

@@ -47,6 +47,7 @@
 
 #include "flight/alt_hold.h"
 #include "flight/autopilot.h"
+#include "flight/bank_mode.h"
 #include "flight/failsafe.h"
 #include "flight/gps_rescue.h"
 #include "flight/launch_wing.h"
@@ -225,8 +226,15 @@ static void calculateThrottleAndCurrentMotorEndpoints(timeUs_t currentTimeUs)
             pidResetIterm();
         }
     } else {
-        // TODO(bank): BANK_MODE computes collective as (m*g + Fz) / (cos(theta) * cos(phi)) instead of using the stick
-        throttle = rcCommand[THROTTLE] - PWM_RANGE_MIN + throttleAngleCorrection;
+#ifdef USE_BANK_MODE
+        if (FLIGHT_MODE(BANK_MODE)) {
+            // The collective already includes the tilt compensation, so the angle correction is not added
+            throttle = bankModeGetCollective() * PWM_RANGE;
+        } else
+#endif
+        {
+            throttle = rcCommand[THROTTLE] - PWM_RANGE_MIN + throttleAngleCorrection;
+        }
         currentThrottleInputRange = PWM_RANGE;
 #ifdef USE_DYN_IDLE
         if (mixerRuntime.dynIdleMinRps > 0.0f) {

@@ -1241,6 +1241,14 @@ const clivalue_t valueTable[] = {
 #ifdef USE_BANK_MODE
 // PG_BANK_MODE_CONFIG
     { "bank_thrust_to_weight",      VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 110, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, thrustToWeight) },
+    { "bank_max_bank_angle",        VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 5, 80 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, maxBankAngle) },
+    { "bank_max_tilt_angle",        VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 5, 60 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, maxTiltAngle) },
+    { "bank_stick_deadband",        VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 0, 25 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, stickDeadband) },
+    { "bank_head_check_range",      VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 0, 180 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, headCheckRange) },
+    { "bank_head_check_rate",       VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 30, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, headCheckRate) },
+    { "bank_yaw_align_gain",        VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 0, 200 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, yawAlignGain) },
+    { "bank_yaw_max_rate",          VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 30, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, yawMaxRate) },
+    { "bank_drag_threshold",        VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 500 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, dragThreshold) },
 #endif // USE_BANK_MODE
 
 #if defined(USE_WING) && defined(USE_LAUNCH_WING)

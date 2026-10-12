@@ -41,6 +41,7 @@
 #include "fc/runtime_config.h"
 
 #include "flight/autopilot.h"
+#include "flight/bank_mode.h"
 #include "flight/failsafe.h"
 #include "flight/imu.h"
 #include "flight/gps_rescue.h"
@@ -669,11 +670,24 @@ FAST_CODE void processRcCommand(void)
                 angleRate = applyRates(axis, rcCommandf, rcCommandfAbs);
             }
 
+#ifdef USE_BANK_MODE
+            if ((axis == FD_YAW) && FLIGHT_MODE(BANK_MODE)) {
+                // Bank mode steers the yaw: the nose follows the direction of travel. The yaw stick is the
+                // head check, which the bank logic reads from the deflection, so it is not also a rate here.
+                angleRate = bankModeGetYawRate();
+            }
+#endif
+
             rawSetpoint[axis] = constrainf(angleRate, -1.0f * currentControlRateProfile->rate_limit[axis], 1.0f * currentControlRateProfile->rate_limit[axis]);
             DEBUG_SET(DEBUG_ANGLERATE, axis, angleRate);  //!< [index:0..2] Setpoint Rate ({roll|pitch|yaw}) [unit:dps]
 
 #ifdef USE_FEEDFORWARD
             calculateFeedforward(&pidRuntime, axis);
+#ifdef USE_BANK_MODE
+            if ((axis == FD_YAW) && FLIGHT_MODE(BANK_MODE)) {
+                feedforwardRaw[axis] = 0.0f;
+            }
+#endif
 #endif // USE_FEEDFORWARD
 
             // log the smoothed Rx Rate from non-outliers, this will not show the steps every three valid packets
@@ -743,7 +757,6 @@ FAST_CODE_NOINLINE void updateRcCommands(void)
             }
         }
     }
-    // TODO(bank): when BANK_MODE is active, turn the sticks into force-vector setpoints here (see flight/bank_mode.c)
     if (FLIGHT_MODE(HEADFREE_MODE)) {
         static vector3_t rcCommandBuff;
 

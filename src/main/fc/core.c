@@ -1039,12 +1039,13 @@ void processRxModes(timeUs_t currentTimeUs)
     // BANK is an alternative attitude mode, like ANGLE and HORIZON, and can be switched in flight.
     // Failsafe, GPS rescue, altitude hold and position hold take priority over it, and while it is
     // active it takes priority over the ANGLE and HORIZON switches. Those flags are from the previous cycle.
-    // TODO(bank): decide how BANK should interact with ALT_HOLD/POS_HOLD, HEADFREE and ARMING.
+    // OPEN: how BANK should interact with HEADFREE and arming, and whether it can coexist with ALT_HOLD/POS_HOLD.
     bool bankModeRequested = false;
 #ifdef USE_BANK_MODE
     bankModeRequested = IS_RC_MODE_ACTIVE(BOXBANK)
         && sensors(SENSOR_ACC)
         && !isFixedWing()
+        && !featureIsEnabled(FEATURE_3D)
         && !failsafeIsActive()
         && !FLIGHT_MODE(GPS_RESCUE_MODE | ALT_HOLD_MODE | POS_HOLD_MODE);
     if (bankModeRequested) {

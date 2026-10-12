@@ -1209,6 +1209,8 @@ static void osdElementFlymode(osdElementParms_t *element)
             }
         }
 #endif
+    } else if (FLIGHT_MODE(BANK_MODE)) {
+        strcpy(element->buff, "BANK");
     } else if (FLIGHT_MODE(ANGLE_MODE)) {
         strcpy(element->buff, "ANGL");
     } else if (FLIGHT_MODE(HORIZON_MODE)) {

@@ -22,31 +22,60 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "common/time.h"
 
 /*
- * BANK mode: fly a multirotor like a car on a banked track.
- * See flight/bank_mode.c for the intended behaviour. This is currently a skeleton.
+ * BANK mode: fly a multirotor like a car on a banked track. See flight/bank_mode.c for the behaviour.
  *
- * Files still to be touched for the full feature (all gated by USE_BANK_MODE):
- *   fc/rc.c               stick -> force-vector setpoint shaping (cf. the HEADFREE_MODE block)
- *   flight/imu.c          travel heading and head-check yaw offset (cf. headfree attitude handling)
- *   flight/pid.c          attitude / yaw-rate targets from bank mode
- *   flight/mixer.c        tilt-compensated collective, thrust saturation
- *   fc/core.c             arming / failsafe / mode-priority interaction
- *   osd/osd_elements.c    flight mode text
- *   osd/osd_warnings.c    mode warning, cf. HEADFREE
- *   io/ledstrip.c/.h      LED_MODE_BANK
- *   telemetry/ltm.c, smartport.c, ibus_shared.c   flight mode reporting
- *   blackbox/             log bank state (travel heading, commanded force)
- *   cli/settings.c, pg/bank_mode.c/.h   remaining config (max bank angle, head-check range/rate, deadbands)
- *   Betaflight Configurator: BANK mode in the modes tab (MSP permanentId 59)
+ * Where it plugs in:
+ *   fc/core.c             sets BANK_MODE (an alternative to ANGLE/HORIZON) and calls bankModeUpdate()
+ *   flight/pid.c          takes the roll/pitch angle targets from bankModeGetAngleTarget()
+ *   fc/rc.c               takes the yaw setpoint from bankModeGetYawRate()
+ *   flight/mixer.c        takes the throttle from bankModeGetCollective()
+ *   osd/osd_elements.c, telemetry/{ltm,smartport,ibus_shared}.c   mode reporting
+ *
+ * Not done yet: LED strip mode colour, OSD warning, blackbox fields, and the Betaflight Configurator
+ * modes tab entry (MSP permanentId 59).
  */
 
 #ifdef USE_BANK_MODE
 
+// Roll, pitch and yaw stick inputs are -1..1: roll to the right, pitch forward, yaw counter-clockwise.
+// The vertical input is the throttle stick position, 0 at the bottom (no lift) to 1 at the top.
+typedef struct bankInputs_s {
+    float roll;
+    float pitch;
+    float yaw;
+    float vertical;
+    bool throttleLow;
+    float dragX;                // filtered specific force along body X (forward), g
+    float dragY;                // filtered specific force along body Y (left), g
+    float dt;                   // seconds since the previous update
+} bankInputs_t;
+
+typedef struct bankOutputs_s {
+    float rollDeg;              // roll angle target, positive to the right
+    float pitchDeg;             // pitch angle target, positive nose-down (forward)
+    float yawRateDps;           // yaw rate setpoint, positive counter-clockwise
+    float collective;           // fraction of maximum thrust, 0..1
+} bankOutputs_t;
+
+typedef struct bankState_s {
+    float headCheckOffset;      // radians, positive = nose counter-clockwise from the travel direction
+    float dragX;
+    float dragY;
+    bool filtersValid;
+    bool started;               // the first update since the mode was engaged has been seen
+    bool tiltLocked;            // engaged with the throttle low: no tilt until the right stick is centred
+    timeUs_t lastUpdateUs;
+} bankState_t;
+
 void bankModeUpdate(timeUs_t currentTimeUs);
 bool bankModeIsActive(void);
+float bankModeGetAngleTarget(int axis);     // FD_ROLL or FD_PITCH, degrees
+float bankModeGetYawRate(void);             // degrees per second
+float bankModeGetCollective(void);          // 0..1 of maximum thrust
 
 #endif // USE_BANK_MODE

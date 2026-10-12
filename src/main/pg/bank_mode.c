@@ -32,6 +32,14 @@ PG_REGISTER_WITH_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig, PG_BANK_MODE_C
 
 PG_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig,
     .thrustToWeight = 200,
+    .maxBankAngle = 45,
+    .maxTiltAngle = 30,
+    .stickDeadband = 5,
+    .headCheckRange = 90,
+    .headCheckRate = 360,
+    .yawAlignGain = 40,
+    .yawMaxRate = 360,
+    .dragThreshold = 50,
 );
 
 #endif // USE_BANK_MODE
