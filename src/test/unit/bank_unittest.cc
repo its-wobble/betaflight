@@ -393,9 +393,9 @@ TEST(BankModeTest, BallLoopSettlesIntoACoordinatedTurnAtAnySpeed)
 
 static bankInputs_t centredInputs(void)
 {
-    // right stick centred, throttle at the centre (1 g of lift, hover)
+    // speed stick at the bottom (stopped), lift stick at the centre (1 g of lift, hover)
     bankInputs_t in = {};
-    in.vertical = 0.5f;
+    in.lift = 0.5f;
     in.dt = 0.01f;
     return in;
 }
@@ -420,11 +420,11 @@ TEST(BankModeTest, ComputeSignsFollowTheSticks)
     bankOutputs_t out = {};
     bankInputs_t in = centredInputs();
     in.roll = 1.0f;
-    in.pitch = 1.0f;
+    in.speed = 1.0f;
     bankCompute(bankModeConfig(), &in, &state, &out);
     EXPECT_GT(out.rollDeg, 0.0f);    // roll right
     EXPECT_GT(out.pitchDeg, 0.0f);   // nose-down, forward
-    // forward pitch adds collective so the vertical force is unchanged
+    // forward tilt adds collective so the vertical force is unchanged
     EXPECT_GT(out.collective, 0.5f);
 }
 
@@ -452,9 +452,9 @@ TEST(BankModeTest, ComputeThrottleTopIsAllMaxThrustAsLift)
         bankState_t state = {};
         bankOutputs_t out = {};
         bankInputs_t in = centredInputs();
-        in.vertical = 1.0f;
+        in.lift = 1.0f;
         in.roll = 1.0f;
-        in.pitch = 1.0f;
+        in.speed = 1.0f;
         bankCompute(&config, &in, &state, &out);
         // all the thrust is lift, so there is no budget left for tilt
         EXPECT_NEAR(1.0f, out.collective, 1e-4f);
@@ -470,15 +470,15 @@ TEST(BankModeTest, ComputeThrottleBottomIsFreeFallAndCentreIsHover)
     bankOutputs_t out = {};
     bankInputs_t in = centredInputs();
 
-    in.vertical = 0.0f;
+    in.lift = 0.0f;
     bankCompute(bankModeConfig(), &in, &state, &out);
     EXPECT_FLOAT_EQ(0.0f, out.collective);          // no lift, the craft drops with gravity
 
-    in.vertical = 0.5f;
+    in.lift = 0.5f;
     bankCompute(bankModeConfig(), &in, &state, &out);
     EXPECT_NEAR(0.5f, out.collective, 1e-5f);       // thrust equals weight, 1 / (T/W)
 
-    in.vertical = 1.0f;
+    in.lift = 1.0f;
     bankCompute(bankModeConfig(), &in, &state, &out);
     EXPECT_NEAR(1.0f, out.collective, 1e-5f);       // 2 g of lift at T/W = 2
 }
@@ -486,14 +486,16 @@ TEST(BankModeTest, ComputeThrottleBottomIsFreeFallAndCentreIsHover)
 TEST(BankModeTest, ComputeThrottleIsLinearInLift)
 {
     pgResetAll();
+    bankModeConfig_t config = *bankModeConfig();
+    config.stickDeadband = 0;
     bankState_t state = {};
     bankOutputs_t a = {};
     bankOutputs_t b = {};
     bankInputs_t in = centredInputs();
-    in.vertical = 0.25f;
-    bankCompute(bankModeConfig(), &in, &state, &a);
-    in.vertical = 0.5f;
-    bankCompute(bankModeConfig(), &in, &state, &b);
+    in.lift = 0.25f;
+    bankCompute(&config, &in, &state, &a);
+    in.lift = 0.5f;
+    bankCompute(&config, &in, &state, &b);
     EXPECT_NEAR(b.collective, 2.0f * a.collective, 1e-5f);
 }
 
@@ -503,49 +505,50 @@ TEST(BankModeTest, ComputeBottomStickWithTiltStillGivesNoLift)
     bankState_t state = {};
     bankOutputs_t out = {};
     bankInputs_t in = centredInputs();
-    in.vertical = 0.0f;
+    in.lift = 0.0f;
     in.roll = 1.0f;
-    in.pitch = 1.0f;
+    in.speed = 1.0f;
     bankCompute(bankModeConfig(), &in, &state, &out);
     EXPECT_FLOAT_EQ(0.0f, out.collective);
 }
 
-TEST(BankModeTest, ComputeRightStickCentreMeansNoTiltOrYaw)
+TEST(BankModeTest, ComputeSticksInsideTheDeadbandMeanNoTilt)
 {
     pgResetAll();
     bankState_t state = {};
     bankOutputs_t out = {};
     bankInputs_t in = centredInputs();
     in.roll = 0.04f;    // inside the deadband
-    in.pitch = -0.04f;
+    in.speed = 0.04f;   // just above the bottom
+    in.lift = 0.5f + 0.02f;
     bankCompute(bankModeConfig(), &in, &state, &out);
     EXPECT_FLOAT_EQ(0.0f, out.rollDeg);
     EXPECT_FLOAT_EQ(0.0f, out.pitchDeg);
+    EXPECT_NEAR(0.5f, out.collective, 1e-5f);   // the hover is not disturbed either
 }
 
-TEST(BankModeTest, EngagingOnTheGroundWithTheRightStickOffCentreHoldsTiltUntilCentred)
+TEST(BankModeTest, EngagingOnTheGroundWithTheRollStickOffCentreHoldsTiltUntilCentred)
 {
     pgResetAll();
     bankState_t state = {};
     bankOutputs_t out = {};
     bankInputs_t in = centredInputs();
     in.throttleLow = true;
-    in.vertical = 0.0f;
     in.roll = 1.0f;
-    in.pitch = 1.0f;
+    in.speed = 1.0f;
     bankCompute(bankModeConfig(), &in, &state, &out);
     EXPECT_FLOAT_EQ(0.0f, out.rollDeg);
     EXPECT_FLOAT_EQ(0.0f, out.pitchDeg);
 
     // still held while the stick stays deflected, even once the throttle is raised
     in.throttleLow = false;
-    in.vertical = 0.5f;
+    in.lift = 0.5f;
     bankCompute(bankModeConfig(), &in, &state, &out);
     EXPECT_FLOAT_EQ(0.0f, out.rollDeg);
 
     // centring releases it
     in.roll = 0.0f;
-    in.pitch = 0.0f;
+    in.speed = 0.0f;
     bankCompute(bankModeConfig(), &in, &state, &out);
     in.roll = 1.0f;
     bankCompute(bankModeConfig(), &in, &state, &out);
@@ -563,15 +566,15 @@ TEST(BankModeTest, EngagingInFlightIsNotHeld)
     EXPECT_GT(out.rollDeg, 0.0f);
 }
 
-TEST(BankModeTest, ComputeThrottleLowCutsTheCollective)
+TEST(BankModeTest, ComputeSpeedStickAtTheBottomKeepsTheHoverCollective)
 {
     pgResetAll();
     bankState_t state = {};
     bankOutputs_t out = {};
     bankInputs_t in = centredInputs();
-    in.throttleLow = true;
+    in.throttleLow = true;      // the left stick at the bottom is zero speed, not zero lift
     bankCompute(bankModeConfig(), &in, &state, &out);
-    EXPECT_FLOAT_EQ(0.0f, out.collective);
+    EXPECT_NEAR(0.5f, out.collective, 1e-5f);
 }
 
 TEST(BankModeTest, ComputeFullSticksNeverExceedMaximumThrust)
@@ -585,8 +588,8 @@ TEST(BankModeTest, ComputeFullSticksNeverExceedMaximumThrust)
             bankOutputs_t out = {};
             bankInputs_t in = centredInputs();
             in.roll = 1.0f;
-            in.pitch = -1.0f;
-            in.vertical = vertical;
+            in.speed = 1.0f;
+            in.lift = vertical;
             bankCompute(&config, &in, &state, &out);
             EXPECT_LE(out.collective, 1.0f);
             EXPECT_GE(out.collective, 0.0f);
@@ -611,7 +614,7 @@ TEST(BankModeTest, ComputeHeadCheckLeavesCollectiveAndYawsInHover)
     EXPECT_GT(state.headCheckOffset, 0.0f);
 }
 
-TEST(BankModeTest, ComputeYawFollowsTheBallAndIntegratorResetsOnLowThrottle)
+TEST(BankModeTest, ComputeYawFollowsTheBallAndIntegratorResetsWithNoLift)
 {
     pgResetAll();
     bankState_t state = {};
@@ -627,7 +630,7 @@ TEST(BankModeTest, ComputeYawFollowsTheBallAndIntegratorResetsOnLowThrottle)
     bankCompute(bankModeConfig(), &in, &state, &out);
     EXPECT_GT(out.yawRateDps, 0.0f);   // the integrator still holds the turn rate
 
-    in.throttleLow = true;
+    in.lift = 0.0f;
     bankCompute(bankModeConfig(), &in, &state, &out);
     EXPECT_FLOAT_EQ(0.0f, state.ballIntegrator);
     EXPECT_FLOAT_EQ(0.0f, out.yawRateDps);
@@ -675,7 +678,7 @@ TEST(BankModeTest, ForwardSpeedSignDeadbandAndTiltCorrection)
     EXPECT_NEAR(0.28f / cosf(30.0f * DEG), bankCalcForwardSpeed(-0.3f, 30.0f * DEG, 0.02f), 1e-5f);
 }
 
-TEST(BankModeTest, VelocityToTiltBrakesAtCentreStick)
+TEST(BankModeTest, VelocityToTiltBrakesAtTheBottomOfTheSpeedStick)
 {
     const float maxTilt = 30.0f * DEG;
     EXPECT_FLOAT_EQ(0.0f, bankVelocityToTilt(0.0f, 0.0f, 2.0f, 0.0f, maxTilt));
@@ -702,7 +705,7 @@ TEST(BankModeTest, VelocityToTiltIsLimitedAndSafeAtLowLift)
     EXPECT_LE(fabsf(t), maxTilt);
 }
 
-TEST(BankModeTest, ComputeCentreStickBrakesAForwardMovingCraft)
+TEST(BankModeTest, ComputeSpeedStickAtTheBottomBrakesAForwardMovingCraft)
 {
     pgResetAll();
     bankState_t state = {};
@@ -716,7 +719,7 @@ TEST(BankModeTest, ComputeCentreStickBrakesAForwardMovingCraft)
     EXPECT_GT(out.pitchDeg, 0.0f);
 }
 
-TEST(BankModeTest, ComputeSmallDragAtCentreStickIsIgnored)
+TEST(BankModeTest, ComputeSmallDragAtZeroSpeedIsIgnored)
 {
     pgResetAll();
     bankState_t state = {};
@@ -736,7 +739,7 @@ static float flyForwardSpeed(float stick, float startSpeed, float seconds)
     bankState_t state = {};
     bankOutputs_t out = {};
     bankInputs_t in = centredInputs();
-    in.pitch = stick;
+    in.speed = stick;
     const float k = 0.5f;                   // 1/s: how fast the drag catches up with the thrust
     float v = startSpeed;
     for (float t = 0.0f; t < seconds; t += in.dt) {
@@ -753,7 +756,19 @@ TEST(BankModeTest, ReleasingTheStickBrakesToAStop)
 {
     const float full = tanf(30.0f * DEG);
     EXPECT_NEAR(0.0f, flyForwardSpeed(0.0f, full, 10.0f), 0.03f);
-    EXPECT_NEAR(0.0f, flyForwardSpeed(0.0f, -full, 10.0f), 0.03f);
+}
+
+TEST(BankModeTest, TheSpeedTargetIsNeverNegative)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    for (float stick = 0.0f; stick <= 1.0f; stick += 0.1f) {
+        in.speed = stick;
+        bankCompute(bankModeConfig(), &in, &state, &out);    // at rest
+        EXPECT_GE(out.pitchDeg, 0.0f) << stick;
+    }
 }
 
 TEST(BankModeTest, ReleasingBrakesFasterThanCoasting)
@@ -778,8 +793,8 @@ static void setUpUpdate(void)
     memset(&acc, 0, sizeof(acc));
     memset(&attitude, 0, sizeof(attitude));
     acc.dev.acc_1G_rec = 1.0f / 512.0f;
-    rcCommand[THROTTLE] = 1500;
-    testThrottleStatus = THROTTLE_HIGH;
+    rcCommand[THROTTLE] = 1000;     // speed stick at the bottom
+    testThrottleStatus = THROTTLE_LOW;
 }
 
 TEST(BankModeTest, UpdateMirrorsTheModeFlagAndClearsWhenInactive)

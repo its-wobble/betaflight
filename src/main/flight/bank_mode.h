@@ -42,13 +42,14 @@
 
 #ifdef USE_BANK_MODE
 
-// Roll, pitch and yaw stick inputs are -1..1: roll to the right, pitch forward, yaw counter-clockwise.
-// The vertical input is the throttle stick position, 0 at the bottom (no lift) to 1 at the top.
+// Roll and yaw stick inputs are -1..1: roll to the right, yaw counter-clockwise.
+// The speed input is the throttle stick position, 0 at the bottom (stop) to 1 at the top (no reverse).
+// The lift input is the pitch stick position, 0 at the bottom (no lift), 0.5 at the centre (1 g) to 1 at the top.
 typedef struct bankInputs_s {
     float roll;
-    float pitch;
+    float speed;
     float yaw;
-    float vertical;
+    float lift;
     bool throttleLow;
     float dragX;                // filtered specific force along body X (forward), g
     float dragY;                // filtered specific force along body Y (left), g: the "ball"
@@ -71,7 +72,7 @@ typedef struct bankState_s {
     float ballIntegrator;       // yaw rate held by the ball integrator, degrees per second
     bool filtersValid;
     bool started;               // the first update since the mode was engaged has been seen
-    bool tiltLocked;            // engaged with the throttle low: no tilt until the right stick is centred
+    bool tiltLocked;            // engaged with the throttle low: no tilt until the roll stick is centred
     timeUs_t lastUpdateUs;
 } bankState_t;
 
