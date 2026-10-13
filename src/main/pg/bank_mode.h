@@ -34,9 +34,10 @@ typedef struct bankModeConfig_s {
     uint8_t stickDeadband;          // deadband around stick centre, percent of full deflection
     uint8_t headCheckRange;         // nose offset from the travel direction at full yaw stick, degrees
     uint16_t headCheckRate;         // head-check slew and return rate, degrees per second
-    uint8_t yawAlignGain;           // yaw rate per radian of nose-to-travel error, x10 (40 = 4.0 /s)
+    uint16_t ballKp;                // yaw rate per g of lateral specific force (the ball), degrees per second per g
+    uint16_t ballKi;                // ball integral gain, degrees per second squared per g
+    uint16_t ballDeadband;          // lateral specific force ignored around the centre of the ball, x1000 g
     uint16_t yawMaxRate;            // limit of the yaw rate command, degrees per second
-    uint16_t dragThreshold;         // drag below which the travel direction is not trusted, x1000 g
 } bankModeConfig_t;
 
 PG_DECLARE(bankModeConfig_t, bankModeConfig);

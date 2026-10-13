@@ -28,7 +28,7 @@
 
 #include "bank_mode.h"
 
-PG_REGISTER_WITH_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig, PG_BANK_MODE_CONFIG, 0);
+PG_REGISTER_WITH_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig, PG_BANK_MODE_CONFIG, 1);
 
 PG_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig,
     .thrustToWeight = 200,
@@ -37,9 +37,10 @@ PG_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig,
     .stickDeadband = 5,
     .headCheckRange = 90,
     .headCheckRate = 360,
-    .yawAlignGain = 40,
+    .ballKp = 300,
+    .ballKi = 300,
+    .ballDeadband = 20,
     .yawMaxRate = 360,
-    .dragThreshold = 50,
 );
 
 #endif // USE_BANK_MODE

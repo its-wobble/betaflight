@@ -57,7 +57,8 @@ extern "C" {
     float bankCalcCollective(float fz, float theta, float phi, float thrustToWeight);
     float bankSlewHeadCheck(float offset, float target, float rate, float dt);
     void bankRotateTilt(float *theta, float *phi, float offset);
-    float bankCalcAlignYawRate(float dragX, float dragY, float offset, float gainPerSecond, float dragThreshold);
+    float bankCalcBall(float dragX, float dragY, float offset, float deadband);
+    float bankStepBallController(float ball, float kp, float ki, float maxRate, float dt, float *integrator);
     void bankCompute(const bankModeConfig_t *config, const bankInputs_t *in, bankState_t *state, bankOutputs_t *out);
 }
 
@@ -71,6 +72,9 @@ TEST(BankModeTest, ConfigDefaults)
     EXPECT_EQ(200, bankModeConfig()->thrustToWeight);
     EXPECT_EQ(45, bankModeConfig()->maxBankAngle);
     EXPECT_EQ(30, bankModeConfig()->maxTiltAngle);
+    EXPECT_EQ(300, bankModeConfig()->ballKp);
+    EXPECT_EQ(300, bankModeConfig()->ballKi);
+    EXPECT_EQ(20, bankModeConfig()->ballDeadband);
 }
 
 TEST(BankModeTest, ModeBitIsDistinct)
@@ -242,49 +246,141 @@ TEST(BankModeTest, QuarterTurnOffsetSwapsBankAndPitchAxes)
     EXPECT_NEAR(20.0f * DEG, fabsf(theta), 1e-4f);
 }
 
-TEST(BankModeTest, YawAlignmentIgnoresLowDrag)
+TEST(BankModeTest, BallIsCentredWithNoSlip)
 {
-    EXPECT_FLOAT_EQ(0.0f, bankCalcAlignYawRate(0.02f, 0.02f, 0.0f, 4.0f, 0.05f));
-    EXPECT_FLOAT_EQ(0.0f, bankCalcAlignYawRate(0.0f, 0.0f, 0.0f, 4.0f, 0.0f));
+    // travelling straight ahead: the drag points straight back, and there is nothing to correct
+    EXPECT_FLOAT_EQ(0.0f, bankCalcBall(-0.2f, 0.0f, 0.0f, 0.0f));
+    EXPECT_FLOAT_EQ(0.0f, bankCalcBall(0.0f, 0.0f, 0.0f, 0.0f));
 }
 
-TEST(BankModeTest, YawAlignmentTurnsTheNoseTowardsTheTravelDirection)
+TEST(BankModeTest, BallAsksTheNoseToFollowTheSlip)
 {
     // drifting to the left: the drag points to the right (-Y), so the nose should turn left (positive)
-    EXPECT_GT(bankCalcAlignYawRate(0.0f, -0.2f, 0.0f, 4.0f, 0.05f), 0.0f);
+    EXPECT_GT(bankCalcBall(-0.2f, -0.1f, 0.0f, 0.0f), 0.0f);
     // drifting to the right: nose turns right (negative)
-    EXPECT_LT(bankCalcAlignYawRate(0.0f, 0.2f, 0.0f, 4.0f, 0.05f), 0.0f);
-    // moving straight forward: drag points back (-X), nothing to do
-    EXPECT_NEAR(0.0f, bankCalcAlignYawRate(-0.2f, 0.0f, 0.0f, 4.0f, 0.05f), 1e-3f);
-    // proportional: 90 degrees at 4 /s is 4 * pi / 2 rad/s
-    EXPECT_NEAR(4.0f * 90.0f, bankCalcAlignYawRate(0.0f, -0.5f, 0.0f, 4.0f, 0.05f), 1e-2f);
+    EXPECT_LT(bankCalcBall(-0.2f, 0.1f, 0.0f, 0.0f), 0.0f);
+    // sideways from rest still turns towards the slip
+    EXPECT_GT(bankCalcBall(0.0f, -0.1f, 0.0f, 0.0f), 0.0f);
 }
 
-TEST(BankModeTest, YawAlignmentFadesInWithDrag)
+TEST(BankModeTest, BallIsProportionalToTheLateralDragWithNoSpeedFade)
 {
-    const float low = fabsf(bankCalcAlignYawRate(0.0f, -0.06f, 0.0f, 4.0f, 0.05f));
-    const float high = fabsf(bankCalcAlignYawRate(0.0f, -0.2f, 0.0f, 4.0f, 0.05f));
-    EXPECT_GT(low, 0.0f);
-    EXPECT_LT(low, high);
+    EXPECT_NEAR(0.1f, bankCalcBall(-0.2f, -0.1f, 0.0f, 0.0f), 1e-6f);
+    EXPECT_NEAR(0.2f, bankCalcBall(-0.2f, -0.2f, 0.0f, 0.0f), 1e-6f);
+    // the forward drag does not change it
+    EXPECT_NEAR(0.1f, bankCalcBall(-0.6f, -0.1f, 0.0f, 0.0f), 1e-6f);
 }
 
-TEST(BankModeTest, YawAlignmentAlignsTheTailWhenReversing)
+TEST(BankModeTest, BallDeadbandIsSubtractive)
 {
-    // moving backwards: the drag points forward (+X); the tail should follow, so no half-turn
-    EXPECT_NEAR(0.0f, bankCalcAlignYawRate(0.2f, 0.0f, 0.0f, 4.0f, 0.05f), 1e-3f);
-    // reversing and drifting to the left: the tail moves left, so the nose turns right (negative)
-    EXPECT_LT(bankCalcAlignYawRate(0.2f, -0.1f, 0.0f, 4.0f, 0.05f), 0.0f);
+    EXPECT_FLOAT_EQ(0.0f, bankCalcBall(-0.2f, -0.02f, 0.0f, 0.03f));
+    EXPECT_FLOAT_EQ(0.0f, bankCalcBall(-0.2f, 0.03f, 0.0f, 0.03f));
+    EXPECT_NEAR(0.02f, bankCalcBall(-0.2f, -0.05f, 0.0f, 0.03f), 1e-6f);
+    EXPECT_NEAR(-0.02f, bankCalcBall(-0.2f, 0.05f, 0.0f, 0.03f), 1e-6f);
 }
 
-TEST(BankModeTest, YawAlignmentTargetsTheHeadCheckOffset)
+TEST(BankModeTest, BallFlipsSignWhenReversingSoTheTailFollows)
 {
-    // travelling straight ahead with the nose already at the offset: nothing to correct
-    // (travel is 30 degrees to the right of the nose)
+    // moving backwards: the drag points forward (+X). Drifting to the left, the tail moves left,
+    // so the nose turns right (negative)
+    EXPECT_LT(bankCalcBall(0.2f, -0.1f, 0.0f, 0.02f), 0.0f);
+    EXPECT_GT(bankCalcBall(0.2f, 0.1f, 0.0f, 0.02f), 0.0f);
+    // it goes through zero between clearly forward and clearly backward travel, and is continuous
+    float last = bankCalcBall(-0.2f, -0.1f, 0.0f, 0.02f);
+    for (float x = -0.2f; x <= 0.2f; x += 0.005f) {
+        const float ball = bankCalcBall(x, -0.1f, 0.0f, 0.02f);
+        EXPECT_LT(fabsf(ball - last), 0.05f);
+        last = ball;
+    }
+}
+
+TEST(BankModeTest, BallIsMeasuredFromTheHeadCheckFrame)
+{
+    // travelling straight ahead with the nose already at the offset (the travel is 30 degrees to the
+    // right of the nose): the ball is centred, but it would not be without the offset
     const float beta = -30.0f * DEG;
     const float dragX = -0.2f * cosf(beta);
     const float dragY = -0.2f * sinf(beta);
-    EXPECT_NEAR(0.0f, bankCalcAlignYawRate(dragX, dragY, 30.0f * DEG, 4.0f, 0.05f), 1e-2f);
-    EXPECT_LT(bankCalcAlignYawRate(dragX, dragY, 0.0f, 4.0f, 0.05f), 0.0f);
+    EXPECT_NEAR(0.0f, bankCalcBall(dragX, dragY, 30.0f * DEG, 0.0f), 1e-6f);
+    EXPECT_LT(bankCalcBall(dragX, dragY, 0.0f, 0.0f), 0.0f);
+}
+
+TEST(BankModeTest, BallControllerProportionalAndIntegral)
+{
+    float integrator = 0.0f;
+    // one second at a ball of 0.1: P = 300 * 0.1 = 30, I rises by 300 * 0.1 = 30 per second
+    float rate = 0.0f;
+    for (int i = 0; i < 100; i++) {
+        rate = bankStepBallController(0.1f, 300.0f, 300.0f, 360.0f, 0.01f, &integrator);
+    }
+    EXPECT_NEAR(30.0f, integrator, 1e-2f);
+    EXPECT_NEAR(60.0f, rate, 1e-2f);
+    // the centred ball keeps the integrator, which is the rate a steady turn needs
+    rate = bankStepBallController(0.0f, 300.0f, 300.0f, 360.0f, 0.01f, &integrator);
+    EXPECT_NEAR(30.0f, rate, 1e-2f);
+}
+
+TEST(BankModeTest, BallControllerIsLimited)
+{
+    float integrator = 0.0f;
+    float rate = 0.0f;
+    for (int i = 0; i < 10000; i++) {
+        rate = bankStepBallController(1.0f, 300.0f, 300.0f, 360.0f, 0.01f, &integrator);
+    }
+    EXPECT_FLOAT_EQ(360.0f, rate);
+    EXPECT_FLOAT_EQ(360.0f, integrator);
+    // no wind-up: the rate unwinds as soon as the ball reverses
+    for (int i = 0; i < 300; i++) {
+        rate = bankStepBallController(-1.0f, 300.0f, 300.0f, 360.0f, 0.01f, &integrator);
+    }
+    EXPECT_LT(rate, 0.0f);
+}
+
+// Point mass with rotor drag, flying a bank with the yaw driven only by the ball. The controller is
+// never told the speed. The craft holds a constant forward force that balances the drag at v0.
+static void flyBankedTurn(float v0, float bankDeg, float *finalOmega, float *finalBall, float *finalSpeed)
+{
+    const float g = 9.81f;
+    const float k = 0.3f;                           // rotor drag, 1/s
+    const float dt = 0.01f;
+    const float phi = bankDeg * DEG;
+    float vx = v0;                                  // velocity in the body frame
+    float vy = 0.0f;
+    float omega = 0.0f;                             // counter-clockwise, rad/s
+    float integrator = 0.0f;
+    float ball = 0.0f;
+
+    for (int i = 0; i < 6000; i++) {
+        const float dragX = -k * vx / g;
+        const float dragY = -k * vy / g;
+        ball = bankCalcBall(dragX, dragY, 0.0f, 0.0f);
+        omega = bankStepBallController(ball, 300.0f, 300.0f, 360.0f, dt, &integrator) * DEG;
+
+        // thrust: the bank tilts it to the right (-Y) with g * tan(phi); the forward force holds the speed
+        const float ax = k * v0 - k * vx + omega * vy;
+        const float ay = -g * tanf(phi) - k * vy - omega * vx;
+        vx += ax * dt;
+        vy += ay * dt;
+    }
+    *finalOmega = omega;
+    *finalBall = ball;
+    *finalSpeed = sqrtf(vx * vx + vy * vy);
+}
+
+TEST(BankModeTest, BallLoopSettlesIntoACoordinatedTurnAtAnySpeed)
+{
+    // omega = g * tan(phi) / v, to the right (negative), found without the controller knowing v
+    const float speeds[] = {4.0f, 8.0f, 15.0f};
+    const float banks[] = {15.0f, 30.0f, 45.0f};
+    for (float v0 : speeds) {
+        for (float bank : banks) {
+            float omega, ball, speed;
+            flyBankedTurn(v0, bank, &omega, &ball, &speed);
+            const float expected = -9.81f * tanf(bank * DEG) / speed;
+            EXPECT_NEAR(0.0f, ball, 1e-3f) << "v0 " << v0 << " bank " << bank;
+            EXPECT_NEAR(expected, omega, fabsf(expected) * 0.05f) << "v0 " << v0 << " bank " << bank;
+        }
+    }
 }
 
 static bankInputs_t centredInputs(void)
@@ -502,9 +598,31 @@ TEST(BankModeTest, ComputeHeadCheckLeavesCollectiveAndYawsInHover)
     in.yaw = 1.0f;
     bankCompute(bankModeConfig(), &in, &state, &out);
     EXPECT_NEAR(collectiveBefore, out.collective, 1e-5f);
-    // the slew rate drives the nose in the stick direction while the drag is too low to use
+    // with a centred ball only the slew rate drives the nose, in the stick direction
     EXPECT_GT(out.yawRateDps, 0.0f);
     EXPECT_GT(state.headCheckOffset, 0.0f);
+}
+
+TEST(BankModeTest, ComputeYawFollowsTheBallAndIntegratorResetsOnLowThrottle)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.dragX = -0.3f;
+    in.dragY = -0.2f;
+    bankCompute(bankModeConfig(), &in, &state, &out);
+    EXPECT_GT(out.yawRateDps, 0.0f);
+    EXPECT_GT(state.ballIntegrator, 0.0f);
+
+    in.dragY = 0.0f;
+    bankCompute(bankModeConfig(), &in, &state, &out);
+    EXPECT_GT(out.yawRateDps, 0.0f);   // the integrator still holds the turn rate
+
+    in.throttleLow = true;
+    bankCompute(bankModeConfig(), &in, &state, &out);
+    EXPECT_FLOAT_EQ(0.0f, state.ballIntegrator);
+    EXPECT_FLOAT_EQ(0.0f, out.yawRateDps);
 }
 
 TEST(BankModeTest, ComputeYawRateIsLimited)

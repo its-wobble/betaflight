@@ -1246,9 +1246,10 @@ const clivalue_t valueTable[] = {
     { "bank_stick_deadband",        VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 0, 25 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, stickDeadband) },
     { "bank_head_check_range",      VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 0, 180 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, headCheckRange) },
     { "bank_head_check_rate",       VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 30, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, headCheckRate) },
-    { "bank_yaw_align_gain",        VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 0, 200 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, yawAlignGain) },
+    { "bank_ball_kp",               VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 2000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, ballKp) },
+    { "bank_ball_ki",               VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 2000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, ballKi) },
+    { "bank_ball_deadband",         VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 500 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, ballDeadband) },
     { "bank_yaw_max_rate",          VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 30, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, yawMaxRate) },
-    { "bank_drag_threshold",        VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 500 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, dragThreshold) },
 #endif // USE_BANK_MODE
 
 #if defined(USE_WING) && defined(USE_LAUNCH_WING)

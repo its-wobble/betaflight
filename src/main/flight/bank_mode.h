@@ -51,7 +51,7 @@ typedef struct bankInputs_s {
     float vertical;
     bool throttleLow;
     float dragX;                // filtered specific force along body X (forward), g
-    float dragY;                // filtered specific force along body Y (left), g
+    float dragY;                // filtered specific force along body Y (left), g: the "ball"
     float dt;                   // seconds since the previous update
 } bankInputs_t;
 
@@ -66,6 +66,7 @@ typedef struct bankState_s {
     float headCheckOffset;      // radians, positive = nose counter-clockwise from the travel direction
     float dragX;
     float dragY;
+    float ballIntegrator;       // yaw rate held by the ball integrator, degrees per second
     bool filtersValid;
     bool started;               // the first update since the mode was engaged has been seen
     bool tiltLocked;            // engaged with the throttle low: no tilt until the right stick is centred

@@ -85,19 +85,24 @@
  *   direction, and so the travel direction, is not changed by looking away. Tilt magnitude and
  *   collective are invariant under that rotation.
  *
- *   The nose follows the direction of travel without a velocity estimate. The accelerometer measures
- *   thrust (along body Z) plus drag, so its X/Y reading is drag, which points opposite to the
- *   velocity. The angle beta between the nose and the travel direction comes from that, and
- *     yawRate = gain * fade * (beta + headCheckOffset) + headCheckSlewRate
- *   where fade removes the feedback at low drag, where the direction is meaningless. This turns a
- *   bank into a turn like a car on a banked road: the bank tilts the thrust sideways, the craft
- *   moves that way, the nose follows the velocity, and the thrust stays beside the nose.
- *   When moving backwards the tail is aligned with the travel direction instead, like a reversing car.
+ *   Coordinated turn, the "ball": for a banked turn tan(phi) = v * omega / g, so omega = g * tan(phi) / v
+ *   needs the speed. Instead of computing that, yaw is driven to keep the ball of a turn-and-slip
+ *   indicator centred, which is the same condition with v eliminated. The ball is the lateral
+ *   specific force in the travel frame. The accelerometer measures thrust (along body Z) plus drag,
+ *   so its X/Y reading is rotor drag, roughly proportional to velocity and opposite to it, and its
+ *   lateral part is a direct slip signal:
+ *     ball = -direction * deadband(dragX * sin(offset) + dragY * cos(offset))
+ *     yawRate = Kp * ball + integral(Ki * ball) + headCheckSlewRate
+ *   direction is +1 forwards and flips to -1 for clear rearward drag, so the tail follows the travel
+ *   when reversing, like a car. The bank tilts the thrust sideways, the craft starts to slip, the ball
+ *   moves, and the yaw follows until the ball is centred again. At that point the thrust is beside
+ *   the nose and the turn rate is whatever the speed needs. The integral term holds that rate.
  *
  * Limitations:
- *   - A steady turn leaves a small slip angle (turn rate / gain).
- *   - The travel direction relies on ACC calibration: trim errors look like drag.
- *   - Below the drag threshold the head check is open-loop (slew rate feed-forward only).
+ *   - The ball only sees aerodynamic side force, so at low speed there is little signal; the
+ *     deadband stops accelerometer trim errors from being integrated into a slow spin.
+ *   - The loop gain grows with speed, so Ki may need to be lower for fast flight.
+ *   - The head check offset only enters by rotating the ball, it is not tracked as an angle.
  *   - Tmax is not filtered, so it can step if the battery voltage drops.
  *
  * OPEN: interaction with HEADFREE and arming; coexistence with ALT_HOLD/POS_HOLD (they currently cancel BANK).
@@ -108,6 +113,7 @@
 #define BANK_MAX_DT_S           0.2f    // longer gaps restart the filters
 #define BANK_FALLBACK_DT_S      0.01f
 #define BANK_MIN_TILT_COS       1e-3f
+#define BANK_MIN_FLIP_DRAG      0.01f   // g of rearward drag before the ball sign starts to flip
 
 static bankState_t bankState;
 
@@ -193,38 +199,44 @@ STATIC_UNIT_TESTED void bankRotateTilt(float *theta, float *phi, float offset)
     *phi = atan2f(by, uz);
 }
 
-// Yaw rate (degrees per second, counter-clockwise positive) that turns the nose towards the
-// direction of travel, from the drag the accelerometer sees. dragX/dragY are specific forces in g.
-STATIC_UNIT_TESTED float bankCalcAlignYawRate(float dragX, float dragY, float offset, float gainPerSecond, float dragThreshold)
+// The "ball" of a turn-and-slip indicator: the lateral specific force (g) seen from the head-check frame,
+// signed so that a positive value asks for a counter-clockwise (positive) yaw. Zero when the craft is
+// neither slipping nor skidding. dragX/dragY are the filtered accelerometer X/Y readings in g.
+//
+// A multirotor's thrust is along body Z, so the accelerometer's X/Y reading is aerodynamic drag, which is
+// roughly proportional to velocity and opposite to it. Its lateral part is therefore a direct slip signal:
+// no velocity estimate or speed is needed, and low drag (low speed) simply gives a small ball.
+STATIC_UNIT_TESTED float bankCalcBall(float dragX, float dragY, float offset, float deadband)
 {
-    const float magnitude = sqrtf(dragX * dragX + dragY * dragY);
-    const float fadeStart = dragThreshold;
-    const float fadeEnd = 2.0f * dragThreshold;
-    float fade;
-    if (magnitude <= fadeStart) {
-        fade = 0.0f;
-    } else if (magnitude >= fadeEnd) {
-        fade = 1.0f;
+    // the nose sits at +offset (counter-clockwise) from the travel direction, so look along the travel direction
+    const float c = cosf(offset);
+    const float s = sinf(offset);
+    const float forwardDrag = dragX * c - dragY * s;    // negative when travelling forwards
+    float lateral = dragX * s + dragY * c;              // negative when the travel is to the left of the nose
+
+    if (lateral > deadband) {
+        lateral -= deadband;
+    } else if (lateral < -deadband) {
+        lateral += deadband;
     } else {
-        const float x = (magnitude - fadeStart) / (fadeEnd - fadeStart);
-        fade = x * x * (3.0f - 2.0f * x);
-    }
-    if (fade <= 0.0f) {
-        return 0.0f;
+        lateral = 0.0f;
     }
 
-    // drag opposes the velocity, so the travel direction in the body frame is -drag
-    float beta = atan2f(-dragY, -dragX);
-    // reversing: align the tail with the travel direction rather than spinning the nose round
-    if (beta > M_PIf / 2.0f) {
-        beta -= M_PIf;
-    } else if (beta < -M_PIf / 2.0f) {
-        beta += M_PIf;
-    }
+    // Forwards by default, so sideways slip from rest turns the nose towards it. Only clear backwards travel flips
+    // the sign, so the tail follows the travel like a reversing car instead of the loop going unstable.
+    const float flipStart = fmaxf(deadband, BANK_MIN_FLIP_DRAG);
+    const float backwards = constrainf((forwardDrag - flipStart) / flipStart, 0.0f, 1.0f);
+    const float direction = 1.0f - 2.0f * backwards;
 
-    // the nose should sit at +offset (counter-clockwise) from the travel direction
-    const float error = beta + offset;
-    return RADIANS_TO_DEGREES(gainPerSecond * fade * error);
+    return -direction * lateral;
+}
+
+// PI controller on the ball. The proportional part damps, the integral part holds the yaw rate a steady
+// turn needs, so the ball settles exactly at the centre. Returns the yaw rate in degrees per second.
+STATIC_UNIT_TESTED float bankStepBallController(float ball, float kp, float ki, float maxRate, float dt, float *integrator)
+{
+    *integrator = constrainf(*integrator + ki * ball * dt, -maxRate, maxRate);
+    return constrainf(kp * ball + *integrator, -maxRate, maxRate);
 }
 
 STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankInputs_t *in, bankState_t *state, bankOutputs_t *out)
@@ -265,18 +277,25 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
 
     bankRotateTilt(&theta, &phi, state->headCheckOffset);
 
-    const float alignRateDps = bankCalcAlignYawRate(in->dragX, in->dragY, state->headCheckOffset,
-        config->yawAlignGain / 10.0f, config->dragThreshold / 1000.0f);
+    const float maxYawRate = config->yawMaxRate;
+    float coordinationRateDps = 0.0f;
+    if (in->throttleLow) {
+        state->ballIntegrator = 0.0f;
+    } else {
+        const float ball = bankCalcBall(in->dragX, in->dragY, state->headCheckOffset, config->ballDeadband / 1000.0f);
+        coordinationRateDps = bankStepBallController(ball, config->ballKp, config->ballKi, maxYawRate, in->dt, &state->ballIntegrator);
+    }
 
     out->pitchDeg = RADIANS_TO_DEGREES(theta);
     out->rollDeg = RADIANS_TO_DEGREES(phi);
-    out->yawRateDps = constrainf(alignRateDps + offsetRateDps, -(float)config->yawMaxRate, (float)config->yawMaxRate);
+    out->yawRateDps = constrainf(coordinationRateDps + offsetRateDps, -maxYawRate, maxYawRate);
     out->collective = in->throttleLow ? 0.0f : collective;
 }
 
 static void bankReset(void)
 {
     bankState.headCheckOffset = 0.0f;
+    bankState.ballIntegrator = 0.0f;
     bankState.filtersValid = false;
     bankState.lastUpdateUs = 0;
     bankState.started = false;
