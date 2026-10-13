@@ -8,7 +8,7 @@ Goal: fly a drone like a car on a banked track. The three control axes are coupl
 |---|---|---|
 | Left U/D | throttle | **vertical lift command**, not raw throttle. Bottom = no lift at all (free fall, and the pose for arming), centre = 1 g (thrust balances weight), top = maximum thrust entirely as lift, whatever multiple of the weight that is. Uses a user-set thrust-to-weight ratio |
 | Left L/R | yaw | **head check**: yaw the nose away from the direction of travel *without* changing the direction of travel; springs back to neutral when the stick centres |
-| Right U/D | pitch | **forward/backward force command**, coupled pitch + collective: pitching the craft forward also raises collective thrust so the horizontal force component grows while the vertical component is unchanged |
+| Right U/D | pitch | **forward/backward velocity command** ("velocity"), coupled pitch + collective: full stick is the steady speed at the maximum tilt and centre is zero ground speed, so releasing the stick auto-brakes. Speed is estimated from rotor drag (accelerometer) and attitude, in g of drag; control is feedforward + P (`bank_speed_kp`, `bank_speed_deadband`). Pitching forward also raises collective thrust so the vertical component is unchanged |
 | Right L/R | roll | **bank** left/right = turn in the horizontal plane |
 
 Design decisions so far:

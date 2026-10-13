@@ -38,6 +38,8 @@ typedef struct bankModeConfig_s {
     uint16_t ballKi;                // ball integral gain, degrees per second squared per g
     uint16_t ballDeadband;          // lateral specific force ignored around the centre of the ball, x1000 g
     uint16_t yawMaxRate;            // limit of the yaw rate command, degrees per second
+    uint16_t speedKp;               // forward speed error gain, x100 (200 = 2.0): the braking strength at centre stick
+    uint16_t speedDeadband;         // drag ignored around zero when estimating the forward speed, x1000 g
 } bankModeConfig_t;
 
 PG_DECLARE(bankModeConfig_t, bankModeConfig);

@@ -52,6 +52,8 @@ typedef struct bankInputs_s {
     bool throttleLow;
     float dragX;                // filtered specific force along body X (forward), g
     float dragY;                // filtered specific force along body Y (left), g: the "ball"
+    float measuredPitchDeg;     // measured attitude, same signs as the targets: pitch positive nose-down
+    float measuredRollDeg;      // measured attitude: roll positive to the right
     float dt;                   // seconds since the previous update
 } bankInputs_t;
 

@@ -33,6 +33,7 @@ extern "C" {
     #include "fc/rc_modes.h"
     #include "fc/runtime_config.h"
     #include "flight/bank_mode.h"
+    #include "flight/imu.h"
     #include "io/beeper.h"
     #include "pg/bank_mode.h"
     #include "pg/pg.h"
@@ -42,6 +43,7 @@ extern "C" {
     extern uint8_t __config_end;
 
     acc_t acc;
+    attitudeEulerAngles_t attitude;
     float rcCommand[4];
 
     float testDeflection[3];
@@ -57,6 +59,10 @@ extern "C" {
     float bankCalcCollective(float fz, float theta, float phi, float thrustToWeight);
     float bankSlewHeadCheck(float offset, float target, float rate, float dt);
     void bankRotateTilt(float *theta, float *phi, float offset);
+    float bankDeadband(float value, float band);
+    void bankDragToTravelFrame(float dragX, float dragY, float offset, float *forward, float *lateral);
+    float bankCalcForwardSpeed(float forwardDrag, float measuredTheta, float deadband);
+    float bankVelocityToTilt(float vTarget, float v, float kp, float fz, float maxTilt);
     float bankCalcBall(float dragX, float dragY, float offset, float deadband);
     float bankStepBallController(float ball, float kp, float ki, float maxRate, float dt, float *integrator);
     void bankCompute(const bankModeConfig_t *config, const bankInputs_t *in, bankState_t *state, bankOutputs_t *out);
@@ -75,6 +81,8 @@ TEST(BankModeTest, ConfigDefaults)
     EXPECT_EQ(300, bankModeConfig()->ballKp);
     EXPECT_EQ(300, bankModeConfig()->ballKi);
     EXPECT_EQ(20, bankModeConfig()->ballDeadband);
+    EXPECT_EQ(200, bankModeConfig()->speedKp);
+    EXPECT_EQ(20, bankModeConfig()->speedDeadband);
 }
 
 TEST(BankModeTest, ModeBitIsDistinct)
@@ -638,6 +646,129 @@ TEST(BankModeTest, ComputeYawRateIsLimited)
     EXPECT_GE(out.yawRateDps, -(float)bankModeConfig()->yawMaxRate);
 }
 
+TEST(BankModeTest, DeadbandIsSubtractive)
+{
+    EXPECT_FLOAT_EQ(0.0f, bankDeadband(0.02f, 0.02f));
+    EXPECT_FLOAT_EQ(0.0f, bankDeadband(-0.01f, 0.02f));
+    EXPECT_NEAR(0.03f, bankDeadband(0.05f, 0.02f), 1e-6f);
+    EXPECT_NEAR(-0.03f, bankDeadband(-0.05f, 0.02f), 1e-6f);
+}
+
+TEST(BankModeTest, DragToTravelFrameRotatesByTheOffset)
+{
+    float forward, lateral;
+    bankDragToTravelFrame(-0.3f, 0.0f, 0.0f, &forward, &lateral);
+    EXPECT_NEAR(-0.3f, forward, 1e-6f);
+    EXPECT_NEAR(0.0f, lateral, 1e-6f);
+    // nose a quarter turn counter-clockwise from the travel direction: body Y is the travel direction's X
+    bankDragToTravelFrame(0.0f, 0.3f, 90.0f * DEG, &forward, &lateral);
+    EXPECT_NEAR(-0.3f, forward, 1e-5f);
+    EXPECT_NEAR(0.0f, lateral, 1e-5f);
+}
+
+TEST(BankModeTest, ForwardSpeedSignDeadbandAndTiltCorrection)
+{
+    EXPECT_GT(bankCalcForwardSpeed(-0.3f, 0.0f, 0.02f), 0.0f);      // forward drag is negative: forward speed
+    EXPECT_LT(bankCalcForwardSpeed(0.3f, 0.0f, 0.02f), 0.0f);       // travelling backwards
+    EXPECT_NEAR(0.28f, bankCalcForwardSpeed(-0.3f, 0.0f, 0.02f), 1e-6f);
+    EXPECT_FLOAT_EQ(0.0f, bankCalcForwardSpeed(-0.015f, 0.0f, 0.02f));
+    EXPECT_NEAR(0.28f / cosf(30.0f * DEG), bankCalcForwardSpeed(-0.3f, 30.0f * DEG, 0.02f), 1e-5f);
+}
+
+TEST(BankModeTest, VelocityToTiltBrakesAtCentreStick)
+{
+    const float maxTilt = 30.0f * DEG;
+    EXPECT_FLOAT_EQ(0.0f, bankVelocityToTilt(0.0f, 0.0f, 2.0f, 0.0f, maxTilt));
+    EXPECT_LT(bankVelocityToTilt(0.0f, 0.2f, 2.0f, 0.0f, maxTilt), 0.0f);    // moving forwards: tilt back
+    EXPECT_GT(bankVelocityToTilt(0.0f, -0.2f, 2.0f, 0.0f, maxTilt), 0.0f);   // moving backwards: tilt forward
+    EXPECT_NEAR(-atanf(0.4f), bankVelocityToTilt(0.0f, 0.2f, 2.0f, 0.0f, maxTilt), 1e-6f);
+}
+
+TEST(BankModeTest, VelocityToTiltHoldsTheFeedforwardAtSteadySpeed)
+{
+    const float maxTilt = 30.0f * DEG;
+    // at the target speed the error is 0, so the tilt is the one that gives that horizontal force
+    EXPECT_NEAR(20.0f * DEG, bankVelocityToTilt(tanf(20.0f * DEG), tanf(20.0f * DEG), 2.0f, 0.0f, maxTilt), 1e-5f);
+    EXPECT_NEAR(maxTilt, bankVelocityToTilt(tanf(maxTilt), tanf(maxTilt), 2.0f, 0.0f, maxTilt), 1e-5f);
+}
+
+TEST(BankModeTest, VelocityToTiltIsLimitedAndSafeAtLowLift)
+{
+    const float maxTilt = 30.0f * DEG;
+    EXPECT_FLOAT_EQ(maxTilt, bankVelocityToTilt(5.0f, 0.0f, 2.0f, 0.0f, maxTilt));
+    EXPECT_FLOAT_EQ(-maxTilt, bankVelocityToTilt(-5.0f, 0.0f, 2.0f, 0.0f, maxTilt));
+    const float t = bankVelocityToTilt(0.3f, 0.0f, 2.0f, -1.0f, maxTilt);   // free fall: no division by zero
+    EXPECT_TRUE(std::isfinite(t));
+    EXPECT_LE(fabsf(t), maxTilt);
+}
+
+TEST(BankModeTest, ComputeCentreStickBrakesAForwardMovingCraft)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.dragX = -0.3f;                       // travelling forwards
+    bankCompute(bankModeConfig(), &in, &state, &out);
+    EXPECT_LT(out.pitchDeg, 0.0f);          // nose-up to brake
+    in.dragX = 0.3f;                        // travelling backwards
+    bankCompute(bankModeConfig(), &in, &state, &out);
+    EXPECT_GT(out.pitchDeg, 0.0f);
+}
+
+TEST(BankModeTest, ComputeSmallDragAtCentreStickIsIgnored)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.dragX = -0.015f;                     // inside the speed deadband: accelerometer trim, not speed
+    bankCompute(bankModeConfig(), &in, &state, &out);
+    EXPECT_FLOAT_EQ(0.0f, out.pitchDeg);
+}
+
+// Flies the pitch loop against a simple drag model: drag is k * speed, the horizontal thrust is the
+// commanded tilt (the attitude loop is taken as perfect). Speed is in g of drag, so in steady flight it equals
+// the horizontal thrust and it relaxes towards the thrust at rate k.
+static float flyForwardSpeed(float stick, float startSpeed, float seconds)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.pitch = stick;
+    const float k = 0.5f;                   // 1/s: how fast the drag catches up with the thrust
+    float v = startSpeed;
+    for (float t = 0.0f; t < seconds; t += in.dt) {
+        in.measuredPitchDeg = out.pitchDeg;
+        in.dragX = -v * cosf(out.pitchDeg * DEG);    // the accelerometer sees the drag along the tilted body
+        bankCompute(bankModeConfig(), &in, &state, &out);
+        const float thrustX = tanf(out.pitchDeg * DEG);   // 1 g of lift
+        v += k * (thrustX - v) * in.dt;
+    }
+    return v;
+}
+
+TEST(BankModeTest, ReleasingTheStickBrakesToAStop)
+{
+    const float full = tanf(30.0f * DEG);
+    EXPECT_NEAR(0.0f, flyForwardSpeed(0.0f, full, 10.0f), 0.03f);
+    EXPECT_NEAR(0.0f, flyForwardSpeed(0.0f, -full, 10.0f), 0.03f);
+}
+
+TEST(BankModeTest, ReleasingBrakesFasterThanCoasting)
+{
+    const float full = tanf(30.0f * DEG);
+    const float k = 0.5f;
+    const float coasting = full * expf(-k * 2.0f);
+    EXPECT_LT(flyForwardSpeed(0.0f, full, 2.0f), coasting * 0.5f);
+}
+
+TEST(BankModeTest, FullStickSettlesAtTheMaximumTiltSpeed)
+{
+    EXPECT_NEAR(tanf(30.0f * DEG), flyForwardSpeed(1.0f, 0.0f, 20.0f), 0.03f);
+}
+
 static void setUpUpdate(void)
 {
     pgResetAll();
@@ -645,6 +776,7 @@ static void setUpUpdate(void)
     bankModeUpdate(0);
     memset(testDeflection, 0, sizeof(testDeflection));
     memset(&acc, 0, sizeof(acc));
+    memset(&attitude, 0, sizeof(attitude));
     acc.dev.acc_1G_rec = 1.0f / 512.0f;
     rcCommand[THROTTLE] = 1500;
     testThrottleStatus = THROTTLE_HIGH;

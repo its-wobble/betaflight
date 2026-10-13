@@ -28,7 +28,7 @@
 
 #include "bank_mode.h"
 
-PG_REGISTER_WITH_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig, PG_BANK_MODE_CONFIG, 1);
+PG_REGISTER_WITH_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig, PG_BANK_MODE_CONFIG, 2);
 
 PG_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig,
     .thrustToWeight = 200,
@@ -41,6 +41,8 @@ PG_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig,
     .ballKi = 300,
     .ballDeadband = 20,
     .yawMaxRate = 360,
+    .speedKp = 200,
+    .speedDeadband = 20,
 );
 
 #endif // USE_BANK_MODE

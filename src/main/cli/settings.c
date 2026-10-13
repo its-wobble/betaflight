@@ -1250,6 +1250,8 @@ const clivalue_t valueTable[] = {
     { "bank_ball_ki",               VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 2000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, ballKi) },
     { "bank_ball_deadband",         VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 500 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, ballDeadband) },
     { "bank_yaw_max_rate",          VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 30, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, yawMaxRate) },
+    { "bank_speed_kp",              VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, speedKp) },
+    { "bank_speed_deadband",        VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 500 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, speedDeadband) },
 #endif // USE_BANK_MODE
 
 #if defined(USE_WING) && defined(USE_LAUNCH_WING)

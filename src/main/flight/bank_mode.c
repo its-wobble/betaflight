@@ -37,6 +37,8 @@
 #include "fc/rc_controls.h"
 #include "fc/runtime_config.h"
 
+#include "flight/imu.h"
+
 #include "pg/bank_mode.h"
 
 #include "rx/rx.h"
@@ -58,7 +60,8 @@
  *                fall, the safe pose for arming), the centre gives 1 g (thrust balances weight), and the top gives
  *                the maximum thrust, all of it as lift, whatever multiple of the weight that is.
  *   yaw       -> head check: nose offset from the travel direction, springs back to 0 at centre.
- *   pitch     -> forward/backward force command, realised as tilt theta plus collective. Centre = none.
+ *   pitch     -> forward/backward speed command along the travel direction, realised as tilt theta plus
+ *                collective. Full stick = the steady speed at the maximum tilt, centre = stop (auto-brake).
  *   roll      -> bank angle phi, i.e. a turn in the horizontal plane. Centre = none.
  *
  * Arming is therefore with the left stick at the bottom (no lift) and the right stick centred (no tilt).
@@ -68,7 +71,7 @@
  * Each update, while BANK_MODE is active:
  *
  *   phi   = rollStick * maxBankAngle
- *   theta = atan(pitchStick * tan(maxTiltAngle))        // forward force Fx = (1 + Fz) * tan(theta)
+ *   theta = atan((vTarget + Kp * (vTarget - v)) / (1 + Fz))   // clamped to the maximum tilt, see below
  *   Fz    = lift(throttleStick) - 1        // lift: 0 at the bottom, 1 at the centre, Tmax at the top, linear between
  *
  *   Thrust saturation, in priority order: Fz first, then bank (phi), forward force (theta) last.
@@ -79,6 +82,14 @@
  *
  *   The collective is always computed from the limited tilt, never taken from the stick:
  *     T = (1 + Fz) / (cos(theta) * cos(phi)),  collective = T / Tmax
+ *
+ *   Forward speed (pitch stick): the speed is in g of drag, the horizontal thrust that holds it in steady flight,
+ *   so no m/s calibration is needed. It comes from the same filtered accelerometer drag as the ball:
+ *     v       = -deadband(forwardDrag) / cos(measured travel-frame pitch)
+ *     vTarget = pitchStick * tan(maxTiltAngle)
+ *     Fx      = vTarget + Kp * (vTarget - v)             // feedforward + P, no integrator
+ *   At centre stick Fx = -Kp * v, an artificial drag that tilts the craft back in proportion to its speed until
+ *   it stops. At steady speed the error is 0 and the tilt is the one that holds vTarget, as before.
  *
  *   Head check: the offset slews towards yawStick * headCheckRange. The thrust direction is built
  *   in the travel frame and rotated into the body frame by the offset, so the earth-frame thrust
@@ -102,6 +113,11 @@
  *   - The ball only sees aerodynamic side force, so at low speed there is little signal; the
  *     deadband stops accelerometer trim errors from being integrated into a slow spin.
  *   - The loop gain grows with speed, so Ki may need to be lower for fast flight.
+ *   - The speed is only as good as the linear rotor-drag model. Body drag adds a v^2 term at high speed, so the
+ *     stick-to-speed scale is non-linear, but it is monotonic and zero at zero speed.
+ *   - Accelerometer bias reads as speed. The speed deadband hides small bias; a larger one leaves a slow drift.
+ *   - Vertical speed leaks into the body X drag while tilted, and the 2 Hz drag filter adds lag, so a high Kp can
+ *     oscillate.
  *   - The head check offset only enters by rotating the ball, it is not tracked as an angle.
  *   - Tmax is not filtered, so it can step if the battery voltage drops.
  *
@@ -114,6 +130,7 @@
 #define BANK_FALLBACK_DT_S      0.01f
 #define BANK_MIN_TILT_COS       1e-3f
 #define BANK_MIN_FLIP_DRAG      0.01f   // g of rearward drag before the ball sign starts to flip
+#define BANK_MIN_LIFT           0.1f    // lowest lift, in g, used to turn a horizontal force into a tilt
 
 static bankState_t bankState;
 
@@ -199,6 +216,30 @@ STATIC_UNIT_TESTED void bankRotateTilt(float *theta, float *phi, float offset)
     *phi = atan2f(by, uz);
 }
 
+// Subtractive deadband: values within +-band become 0, and larger ones move towards 0 by band,
+// so the output is continuous (no step at the edge of the band).
+STATIC_UNIT_TESTED float bankDeadband(float value, float band)
+{
+    if (value > band) {
+        return value - band;
+    }
+    if (value < -band) {
+        return value + band;
+    }
+    return 0.0f;
+}
+
+// Rotates the body-frame drag (dragX forward, dragY left) into the travel frame. The nose sits at +offset
+// (counter-clockwise) from the travel direction, so the drag is rotated back by offset.
+// forward is negative when travelling forwards; lateral is negative when the travel is to the left of the nose.
+STATIC_UNIT_TESTED void bankDragToTravelFrame(float dragX, float dragY, float offset, float *forward, float *lateral)
+{
+    const float c = cosf(offset);
+    const float s = sinf(offset);
+    *forward = dragX * c - dragY * s;
+    *lateral = dragX * s + dragY * c;
+}
+
 // The "ball" of a turn-and-slip indicator: the lateral specific force (g) seen from the head-check frame,
 // signed so that a positive value asks for a counter-clockwise (positive) yaw. Zero when the craft is
 // neither slipping nor skidding. dragX/dragY are the filtered accelerometer X/Y readings in g.
@@ -208,19 +249,10 @@ STATIC_UNIT_TESTED void bankRotateTilt(float *theta, float *phi, float offset)
 // no velocity estimate or speed is needed, and low drag (low speed) simply gives a small ball.
 STATIC_UNIT_TESTED float bankCalcBall(float dragX, float dragY, float offset, float deadband)
 {
-    // the nose sits at +offset (counter-clockwise) from the travel direction, so look along the travel direction
-    const float c = cosf(offset);
-    const float s = sinf(offset);
-    const float forwardDrag = dragX * c - dragY * s;    // negative when travelling forwards
-    float lateral = dragX * s + dragY * c;              // negative when the travel is to the left of the nose
-
-    if (lateral > deadband) {
-        lateral -= deadband;
-    } else if (lateral < -deadband) {
-        lateral += deadband;
-    } else {
-        lateral = 0.0f;
-    }
+    float forwardDrag;
+    float lateral;
+    bankDragToTravelFrame(dragX, dragY, offset, &forwardDrag, &lateral);
+    lateral = bankDeadband(lateral, deadband);
 
     // Forwards by default, so sideways slip from rest turns the nose towards it. Only clear backwards travel flips
     // the sign, so the tail follows the travel like a reversing car instead of the loop going unstable.
@@ -233,6 +265,27 @@ STATIC_UNIT_TESTED float bankCalcBall(float dragX, float dragY, float offset, fl
 
 // PI controller on the ball. The proportional part damps, the integral part holds the yaw rate a steady
 // turn needs, so the ball settles exactly at the centre. Returns the yaw rate in degrees per second.
+// Forward speed in the travel direction, in g of drag (the horizontal thrust that holds this speed in steady
+// flight), positive when travelling forwards. forwardDrag is the travel-frame drag from bankDragToTravelFrame().
+// The accelerometer sees drag along the tilted body plane, so it is divided by cos(theta) to get the horizontal part.
+STATIC_UNIT_TESTED float bankCalcForwardSpeed(float forwardDrag, float measuredTheta, float deadband)
+{
+    const float cosTheta = fmaxf(cosf(measuredTheta), BANK_MIN_TILT_COS);
+    return bankDeadband(-forwardDrag, deadband) / cosTheta;
+}
+
+// Forward tilt that makes the craft hold the target speed. Feedforward plus P, no integrator:
+//   Fx = vTarget + kp * (vTarget - v)      horizontal force in g
+//   theta = atan(Fx / lift)                lift = 1 + Fz
+// At centre stick (vTarget = 0) this is Fx = -kp * v: extra drag that brakes the craft until it stops.
+// At steady speed vTarget the drag equals the feedforward, so the error is 0 and theta is the tilt for vTarget.
+STATIC_UNIT_TESTED float bankVelocityToTilt(float vTarget, float v, float kp, float fz, float maxTilt)
+{
+    const float fx = vTarget + kp * (vTarget - v);
+    const float lift = fmaxf(1.0f + fz, BANK_MIN_LIFT);
+    return constrainf(atanf(fx / lift), -maxTilt, maxTilt);
+}
+
 STATIC_UNIT_TESTED float bankStepBallController(float ball, float kp, float ki, float maxRate, float dt, float *integrator)
 {
     *integrator = constrainf(*integrator + ki * ball * dt, -maxRate, maxRate);
@@ -264,8 +317,20 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     const float yawStick = bankShapeStick(in->yaw, deadband);
 
     float phi = rollStick * DEGREES_TO_RADIANS(config->maxBankAngle);
-    float theta = atanf(pitchStick * tanf(DEGREES_TO_RADIANS(config->maxTiltAngle)));
     float fz = bankLiftFromStick(in->vertical, thrustToWeight) - 1.0f;
+
+    // Pitch stick = forward speed along the travel direction (in g of drag, full stick = steady flight at max tilt).
+    // The measured speed comes from the drag and the measured tilt, both seen from the travel frame.
+    const float maxTilt = DEGREES_TO_RADIANS(config->maxTiltAngle);
+    float measuredTheta = DEGREES_TO_RADIANS(in->measuredPitchDeg);
+    float measuredPhi = DEGREES_TO_RADIANS(in->measuredRollDeg);
+    bankRotateTilt(&measuredTheta, &measuredPhi, -state->headCheckOffset);
+    float forwardDrag;
+    float lateralDrag;
+    bankDragToTravelFrame(in->dragX, in->dragY, state->headCheckOffset, &forwardDrag, &lateralDrag);
+    const float speed = bankCalcForwardSpeed(forwardDrag, measuredTheta, config->speedDeadband / 1000.0f);
+    const float targetSpeed = pitchStick * tanf(maxTilt);
+    float theta = bankVelocityToTilt(targetSpeed, speed, config->speedKp / 100.0f, fz, maxTilt);
 
     fz = bankLimitTilt(fz, &theta, &phi, thrustToWeight);
     const float collective = bankCalcCollective(fz, theta, phi, thrustToWeight);
@@ -348,6 +413,8 @@ void bankModeUpdate(timeUs_t currentTimeUs)
         .throttleLow = calculateThrottleStatus() == THROTTLE_LOW,
         .dragX = bankState.dragX,
         .dragY = bankState.dragY,
+        .measuredPitchDeg = attitude.raw[FD_PITCH] * 0.1f,
+        .measuredRollDeg = attitude.raw[FD_ROLL] * 0.1f,
         .dt = dt,
     };
     bankOutputs_t outputs;
