@@ -73,6 +73,12 @@ extern "C" {
 
 static const float DEG = M_PI / 180.0f;
 
+// The configured thrust-to-weight ratio, as a multiple of the weight. Hover needs a collective of 1 / T/W.
+static float defaultThrustToWeight(void)
+{
+    return bankModeConfig()->thrustToWeight / 100.0f;
+}
+
 TEST(BankModeTest, ConfigDefaults)
 {
     pgResetAll();
@@ -411,7 +417,7 @@ TEST(BankModeTest, ComputeAtCentreHoversWithNoTilt)
     EXPECT_NEAR(0.0f, out.rollDeg, 1e-5f);
     EXPECT_NEAR(0.0f, out.pitchDeg, 1e-5f);
     EXPECT_NEAR(0.0f, out.yawRateDps, 1e-5f);
-    EXPECT_NEAR(0.5f, out.collective, 1e-5f);
+    EXPECT_NEAR(1.0f / defaultThrustToWeight(), out.collective, 1e-5f);
 }
 
 TEST(BankModeTest, ComputeSignsFollowTheSticks)
@@ -477,7 +483,7 @@ TEST(BankModeTest, ComputeThrottleBottomIsFreeFallAndCentreIsHover)
 
     in.lift = 0.5f;
     bankCompute(bankModeConfig(), &in, &state, &out);
-    EXPECT_NEAR(0.5f, out.collective, 1e-5f);       // thrust equals weight, 1 / (T/W)
+    EXPECT_NEAR(1.0f / defaultThrustToWeight(), out.collective, 1e-5f);       // thrust equals weight, 1 / (T/W)
 
     in.lift = 1.0f;
     bankCompute(bankModeConfig(), &in, &state, &out);
@@ -525,7 +531,7 @@ TEST(BankModeTest, ComputeSticksInsideTheDeadbandMeanNoTilt)
     bankCompute(bankModeConfig(), &in, &state, &out);
     EXPECT_FLOAT_EQ(0.0f, out.rollDeg);
     EXPECT_FLOAT_EQ(0.0f, out.pitchDeg);
-    EXPECT_NEAR(0.5f, out.collective, 1e-5f);   // the hover is not disturbed either
+    EXPECT_NEAR(1.0f / defaultThrustToWeight(), out.collective, 1e-5f);   // the hover is not disturbed either
 }
 
 TEST(BankModeTest, EngagingOnTheGroundWithTheRollStickOffCentreHoldsTiltUntilCentred)
@@ -575,7 +581,7 @@ TEST(BankModeTest, ComputeSpeedStickAtTheBottomKeepsTheHoverCollective)
     bankInputs_t in = centredInputs();
     in.throttleLow = true;      // the left stick at the bottom is zero speed, not zero lift
     bankCompute(bankModeConfig(), &in, &state, &out);
-    EXPECT_NEAR(0.5f, out.collective, 1e-5f);
+    EXPECT_NEAR(1.0f / defaultThrustToWeight(), out.collective, 1e-5f);
 }
 
 TEST(BankModeTest, ComputeFullSticksNeverExceedMaximumThrust)
@@ -879,8 +885,8 @@ TEST(BankModeTest, ThrustToWeightIsNotLearntWhileDisarmed)
     for (int i = 0; i < 100; i++) {
         bankCompute(bankModeConfig(), &in, &state, &out);
     }
-    EXPECT_FLOAT_EQ(2.0f, state.thrustToWeight);
-    EXPECT_NEAR(0.5f, out.collective, 1e-5f);
+    EXPECT_FLOAT_EQ(defaultThrustToWeight(), state.thrustToWeight);
+    EXPECT_NEAR(1.0f / defaultThrustToWeight(), out.collective, 1e-5f);
 }
 
 static void setUpUpdate(void)
@@ -900,7 +906,7 @@ static void setUpUpdate(void)
 TEST(BankModeTest, UpdateLearnsTheThrustToWeightWhileArmedAndForgetsItOnDisarm)
 {
     setUpUpdate();
-    EXPECT_FLOAT_EQ(2.0f, bankModeGetThrustToWeight());
+    EXPECT_FLOAT_EQ(defaultThrustToWeight(), bankModeGetThrustToWeight());
     ENABLE_ARMING_FLAG(ARMED);
     ENABLE_FLIGHT_MODE(BANK_MODE);
     timeUs_t now = 1000;
@@ -919,7 +925,7 @@ TEST(BankModeTest, UpdateLearnsTheThrustToWeightWhileArmedAndForgetsItOnDisarm)
 
     DISABLE_ARMING_FLAG(ARMED);
     bankModeUpdate(now + 10000);
-    EXPECT_FLOAT_EQ(2.0f, bankModeGetThrustToWeight());
+    EXPECT_FLOAT_EQ(defaultThrustToWeight(), bankModeGetThrustToWeight());
 }
 
 TEST(BankModeTest, UpdateMirrorsTheModeFlagAndClearsWhenInactive)
@@ -931,9 +937,9 @@ TEST(BankModeTest, UpdateMirrorsTheModeFlagAndClearsWhenInactive)
     ENABLE_FLIGHT_MODE(BANK_MODE);
     bankModeUpdate(2000);
     EXPECT_TRUE(bankModeIsActive());
-    EXPECT_NEAR(0.5f, bankModeGetCollective(), 1e-5f);
+    EXPECT_NEAR(1.0f / defaultThrustToWeight(), bankModeGetCollective(), 1e-5f);
 
-    testDeflection[FD_ROLL] = 1.0f;
+    testDeflection[FD_YAW] = -1.0f;     // yaw stick right = bank right
     bankModeUpdate(12000);
     EXPECT_GT(bankModeGetAngleTarget(FD_ROLL), 0.0f);
 

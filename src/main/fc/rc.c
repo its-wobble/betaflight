@@ -673,7 +673,7 @@ FAST_CODE void processRcCommand(void)
 #ifdef USE_BANK_MODE
             if ((axis == FD_YAW) && FLIGHT_MODE(BANK_MODE)) {
                 // Bank mode steers the yaw: the nose follows the direction of travel. The yaw stick is the
-                // head check, which the bank logic reads from the deflection, so it is not also a rate here.
+                // bank command, which the bank logic reads from the deflection, so it is not also a rate here.
                 angleRate = bankModeGetYawRate();
             }
 #endif

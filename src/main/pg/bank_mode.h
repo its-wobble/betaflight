@@ -29,10 +29,10 @@
 
 typedef struct bankModeConfig_s {
     uint16_t thrustToWeight;        // max thrust / weight, x100 (200 = 2.0): the starting value, learnt in flight
-    uint8_t maxBankAngle;           // bank angle at full roll stick, degrees
+    uint8_t maxBankAngle;           // bank angle at full yaw (bank) stick, degrees
     uint8_t maxTiltAngle;           // forward tilt at full speed (throttle) stick, degrees
     uint8_t stickDeadband;          // deadband around stick centre, percent of full deflection
-    uint8_t headCheckRange;         // nose offset from the travel direction at full yaw stick, degrees
+    uint8_t headCheckRange;         // nose offset from the travel direction at full roll (head check) stick, degrees
     uint16_t headCheckRate;         // head-check slew and return rate, degrees per second
     uint16_t ballKp;                // yaw rate per g of lateral specific force (the ball), degrees per second per g
     uint16_t ballKi;                // ball integral gain, degrees per second squared per g
