@@ -57,6 +57,7 @@ extern "C" {
     float bankLimitTilt(float fz, float *theta, float *phi, float thrustToWeight);
     float bankLiftFromStick(float stick, float thrustToWeight);
     float bankCalcCollective(float fz, float theta, float phi, float thrustToWeight);
+    float bankLearnThrustToWeight(float estimate, float prior, float accZ, float collective, float thrustDemand, float dt);
     float bankSlewHeadCheck(float offset, float target, float rate, float dt);
     void bankRotateTilt(float *theta, float *phi, float offset);
     float bankDeadband(float value, float band);
@@ -784,6 +785,104 @@ TEST(BankModeTest, FullStickSettlesAtTheMaximumTiltSpeed)
     EXPECT_NEAR(tanf(30.0f * DEG), flyForwardSpeed(1.0f, 0.0f, 20.0f), 0.03f);
 }
 
+TEST(BankModeTest, LearnThrustToWeightConvergesToTheMeasuredRatioAtHover)
+{
+    // T/W is really 2.4: at 1 g of demand the collective was 1 / 2.0, but the accelerometer saw 1.2 g
+    float estimate = 2.0f;
+    for (int i = 0; i < 2000; i++) {
+        estimate = bankLearnThrustToWeight(estimate, 2.0f, 1.2f, 0.5f, 1.0f, 0.01f);
+    }
+    EXPECT_NEAR(2.4f, estimate, 1e-3f);
+}
+
+TEST(BankModeTest, LearnThrustToWeightOnlyLearnsNearOneG)
+{
+    EXPECT_FLOAT_EQ(2.0f, bankLearnThrustToWeight(2.0f, 2.0f, 0.5f, 0.0f, 0.0f, 0.01f));     // no collective yet
+    EXPECT_FLOAT_EQ(2.0f, bankLearnThrustToWeight(2.0f, 2.0f, 0.5f, 0.25f, 0.5f, 0.01f));    // descending
+    EXPECT_FLOAT_EQ(2.0f, bankLearnThrustToWeight(2.0f, 2.0f, 1.8f, 0.8f, 1.6f, 0.01f));     // climbing or banked hard
+    EXPECT_LT(bankLearnThrustToWeight(2.0f, 2.0f, 1.1f, 0.6f, 1.2f, 0.01f), 2.0f);          // just above 1 g is learnt
+}
+
+TEST(BankModeTest, LearnThrustToWeightIsLimitedAroundThePrior)
+{
+    float high = 2.0f;
+    float low = 2.0f;
+    for (int i = 0; i < 2000; i++) {
+        high = bankLearnThrustToWeight(high, 2.0f, 3.0f, 0.5f, 1.0f, 0.01f);
+        low = bankLearnThrustToWeight(low, 2.0f, 0.2f, 0.5f, 1.0f, 0.01f);
+    }
+    EXPECT_NEAR(2.6f, high, 1e-5f);
+    EXPECT_NEAR(1.4f, low, 1e-5f);
+    // never below 1: the craft cannot be asked to hover on more than all of its thrust
+    EXPECT_FLOAT_EQ(1.0f, bankLearnThrustToWeight(1.1f, 1.1f, 0.2f, 0.9f, 1.0f, 10.0f));
+}
+
+// Hovers at the centre of the lift stick with a wrong configured T/W. The accelerometer sees the real thrust,
+// trueTw * collective, or 1 g while resting on the ground. Returns the vertical acceleration at the end, in g.
+static float hoverWithWrongThrustToWeight(int configuredTw, float trueTw, float lift, bool onGround, float seconds, float *finalTw)
+{
+    pgResetAll();
+    bankModeConfig_t config = *bankModeConfig();
+    config.thrustToWeight = configuredTw;
+    config.stickDeadband = 0;
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.armed = true;
+    in.lift = lift;
+    float verticalAccel = 0.0f;
+    for (float t = 0.0f; t < seconds; t += in.dt) {
+        const float thrust = trueTw * out.collective;
+        verticalAccel = thrust - 1.0f;
+        if (onGround && verticalAccel <= 0.0f) {
+            in.accZ = 1.0f;     // the ground holds the rest of the weight
+            verticalAccel = 0.0f;
+        } else {
+            onGround = false;
+            in.accZ = thrust;
+        }
+        bankCompute(&config, &in, &state, &out);
+    }
+    *finalTw = state.thrustToWeight;
+    return verticalAccel;
+}
+
+TEST(BankModeTest, CentreLiftStickHoldsTheHeightWithAWrongThrustToWeight)
+{
+    float tw;
+    // configured too high: the centre stick would sink
+    EXPECT_NEAR(0.0f, hoverWithWrongThrustToWeight(200, 1.7f, 0.5f, false, 20.0f, &tw), 1e-3f);
+    EXPECT_NEAR(1.7f, tw, 1e-3f);
+    // configured too low: the centre stick would climb
+    EXPECT_NEAR(0.0f, hoverWithWrongThrustToWeight(200, 2.3f, 0.5f, false, 20.0f, &tw), 1e-3f);
+    EXPECT_NEAR(2.3f, tw, 1e-3f);
+}
+
+TEST(BankModeTest, GroundContactNeverRaisesTheEstimate)
+{
+    float tw;
+    // configured too high, on the ground at the centre stick: not enough thrust to lift off, the estimate holds
+    hoverWithWrongThrustToWeight(240, 2.0f, 0.5f, true, 10.0f, &tw);
+    EXPECT_NEAR(2.4f, tw, 1e-3f);
+    // a little above the centre it falls until the craft lifts off, then it learns the real value
+    hoverWithWrongThrustToWeight(240, 2.0f, 0.55f, true, 30.0f, &tw);
+    EXPECT_NEAR(2.0f, tw, 1e-2f);
+}
+
+TEST(BankModeTest, ThrustToWeightIsNotLearntWhileDisarmed)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.accZ = 1.5f;
+    for (int i = 0; i < 100; i++) {
+        bankCompute(bankModeConfig(), &in, &state, &out);
+    }
+    EXPECT_FLOAT_EQ(2.0f, state.thrustToWeight);
+    EXPECT_NEAR(0.5f, out.collective, 1e-5f);
+}
+
 static void setUpUpdate(void)
 {
     pgResetAll();
@@ -795,6 +894,32 @@ static void setUpUpdate(void)
     acc.dev.acc_1G_rec = 1.0f / 512.0f;
     rcCommand[THROTTLE] = 1000;     // speed stick at the bottom
     testThrottleStatus = THROTTLE_LOW;
+    DISABLE_ARMING_FLAG(ARMED);
+}
+
+TEST(BankModeTest, UpdateLearnsTheThrustToWeightWhileArmedAndForgetsItOnDisarm)
+{
+    setUpUpdate();
+    EXPECT_FLOAT_EQ(2.0f, bankModeGetThrustToWeight());
+    ENABLE_ARMING_FLAG(ARMED);
+    ENABLE_FLIGHT_MODE(BANK_MODE);
+    timeUs_t now = 1000;
+    for (int i = 0; i < 2000; i++) {
+        acc.accADC.z = 2.2f * bankModeGetCollective() * 512.0f;     // the real T/W is 2.2
+        bankModeUpdate(now);
+        now += 10000;
+    }
+    EXPECT_NEAR(2.2f, bankModeGetThrustToWeight(), 1e-2f);
+    EXPECT_NEAR(1.0f / 2.2f, bankModeGetCollective(), 1e-3f);
+
+    // kept across the mode being switched off and on
+    DISABLE_FLIGHT_MODE(BANK_MODE);
+    bankModeUpdate(now);
+    EXPECT_NEAR(2.2f, bankModeGetThrustToWeight(), 1e-2f);
+
+    DISABLE_ARMING_FLAG(ARMED);
+    bankModeUpdate(now + 10000);
+    EXPECT_FLOAT_EQ(2.0f, bankModeGetThrustToWeight());
 }
 
 TEST(BankModeTest, UpdateMirrorsTheModeFlagAndClearsWhenInactive)

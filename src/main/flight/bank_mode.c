@@ -84,6 +84,15 @@
  *   The collective is always computed from the limited tilt, never taken from the stick:
  *     T = (1 + Fz) / (cos(theta) * cos(phi)),  collective = T / Tmax
  *
+ *   Thrust-to-weight (Tmax) is learnt in flight, so the centre of the lift stick holds the height without having to
+ *   guess it. The thrust is along body Z, so the accelerometer's Z reading is the thrust in g whatever the tilt:
+ *     Tmax = lowpass(accZ / collective)     // learnt only while armed and T is between 1 g and 1 g + a small window
+ *   Learning only near 1 g makes Tmax the value that hovers at the centre of the stick, whatever the shape of the
+ *   thrust curve. On the ground the accelerometer reads 1 g whatever the collective, so with T = 1 g the estimate
+ *   holds, and with the stick above the centre (T > 1 g) it can only fall, until the craft lifts off and the real
+ *   thrust is measured. bank_thrust_to_weight is the starting value, and the
+ *   estimate is kept within +-30% of it. It is reset on disarm.
+ *
  *   Forward speed (throttle stick): the speed is in g of drag, the horizontal thrust that holds it in steady flight,
  *   so no m/s calibration is needed. It comes from the same filtered accelerometer drag as the ball:
  *     v       = -deadband(forwardDrag) / cos(measured travel-frame pitch)
@@ -120,7 +129,12 @@
  *   - Vertical speed leaks into the body X drag while tilted, and the 2 Hz drag filter adds lag, so a high Kp can
  *     oscillate.
  *   - The head check offset only enters by rotating the ball, it is not tracked as an angle.
- *   - Tmax is not filtered, so it can step if the battery voltage drops.
+ *   - The centre of the lift stick holds the vertical acceleration at zero, not the vertical speed: a climb or a
+ *     descent carries on at the centre, slowed only by drag. Vertical speed is not observable from the
+ *     accelerometer, because the vertical drag and the thrust share the Z axis.
+ *   - Vertical drag reads as less thrust, so a steady climb at the centre lowers the estimate slightly.
+ *   - Tmax is only learnt near level hover. Away from it the thrust is taken as linear in the collective, so with
+ *     a convex thrust curve a hard bank or a full-lift climb gets a little less thrust than asked for.
  *
  * OPEN: interaction with HEADFREE and arming; coexistence with ALT_HOLD/POS_HOLD (they currently cancel BANK).
  */
@@ -132,12 +146,17 @@
 #define BANK_MIN_TILT_COS       1e-3f
 #define BANK_MIN_FLIP_DRAG      0.01f   // g of rearward drag before the ball sign starts to flip
 #define BANK_MIN_LIFT           0.1f    // lowest lift, in g, used to turn a horizontal force into a tilt
+#define BANK_TW_FILTER_HZ       0.2f    // cutoff of the thrust-to-weight learning filter
+#define BANK_TW_LEARN_WINDOW    0.3f    // g of thrust above 1 g that is still learnt from
+#define BANK_TW_LEARN_TOLERANCE 1e-3f   // g of thrust below 1 g that is still learnt from (rounding at the centre)
+#define BANK_TW_RANGE           0.3f    // the estimate stays within this fraction of the configured value
 
 static bankState_t bankState;
 
 static FAST_DATA_ZERO_INIT float bankAngleTargetDeg[RP_AXIS_COUNT];
 static FAST_DATA_ZERO_INIT float bankYawRateDps;
 static FAST_DATA_ZERO_INIT float bankCollective;
+static FAST_DATA_ZERO_INIT float bankThrustToWeight;
 static FAST_DATA_ZERO_INIT bool bankModeActive;
 
 // Removes the deadband and rescales so full deflection still gives 1.
@@ -188,6 +207,22 @@ STATIC_UNIT_TESTED float bankCalcCollective(float fz, float theta, float phi, fl
     const float cosTilt = fmaxf(cosf(theta) * cosf(phi), BANK_MIN_TILT_COS);
     const float thrust = (1.0f + fz) / cosTilt;
     return constrainf(thrust / fmaxf(thrustToWeight, 1.0f), 0.0f, 1.0f);
+}
+
+// Learns the thrust-to-weight ratio from the accelerometer. The thrust is along body Z, so accZ is the thrust in g
+// whatever the tilt, and accZ / collective is the thrust a full collective would give, measured at this operating
+// point. thrustDemand and collective are those of the previous update, the ones the accelerometer is responding to.
+// Only learnt between 1 g and 1 g + BANK_TW_LEARN_WINDOW of thrust: the neutral lift stick, nearly level. Returns the
+// new estimate, kept within BANK_TW_RANGE of the configured prior.
+STATIC_UNIT_TESTED float bankLearnThrustToWeight(float estimate, float prior, float accZ, float collective, float thrustDemand, float dt)
+{
+    if (thrustDemand < 1.0f - BANK_TW_LEARN_TOLERANCE || thrustDemand > 1.0f + BANK_TW_LEARN_WINDOW) {
+        return estimate;
+    }
+    const float rc = 1.0f / (2.0f * M_PIf * BANK_TW_FILTER_HZ);
+    const float alpha = dt / (rc + dt);
+    estimate += alpha * (accZ / collective - estimate);
+    return constrainf(estimate, fmaxf(prior * (1.0f - BANK_TW_RANGE), 1.0f), prior * (1.0f + BANK_TW_RANGE));
 }
 
 // Moves the head-check offset towards the target by at most rate * dt. Returns the new offset.
@@ -296,7 +331,16 @@ STATIC_UNIT_TESTED float bankStepBallController(float ball, float kp, float ki, 
 STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankInputs_t *in, bankState_t *state, bankOutputs_t *out)
 {
     const float deadband = config->stickDeadband / 100.0f;
-    const float thrustToWeight = config->thrustToWeight / 100.0f;
+
+    const float thrustToWeightPrior = config->thrustToWeight / 100.0f;
+    if (state->thrustToWeight == 0.0f) {
+        state->thrustToWeight = thrustToWeightPrior;
+    }
+    if (in->armed) {
+        state->thrustToWeight = bankLearnThrustToWeight(state->thrustToWeight, thrustToWeightPrior,
+            in->accZ, state->collective, state->thrustDemand, in->dt);
+    }
+    const float thrustToWeight = state->thrustToWeight;
 
     float rollStick = bankShapeStick(in->roll, deadband);
     float speedStick = bankShapeStick(in->speed, deadband);     // 0..1, the deadband is at the bottom
@@ -337,6 +381,8 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
 
     fz = bankLimitTilt(fz, &theta, &phi, thrustToWeight);
     const float collective = bankCalcCollective(fz, theta, phi, thrustToWeight);
+    state->collective = collective;
+    state->thrustDemand = collective * thrustToWeight;
 
     const float previousOffset = state->headCheckOffset;
     const float offsetTarget = yawStick * DEGREES_TO_RADIANS(config->headCheckRange);
@@ -365,6 +411,8 @@ static void bankReset(void)
 {
     bankState.headCheckOffset = 0.0f;
     bankState.ballIntegrator = 0.0f;
+    bankState.collective = 0.0f;    // nothing to learn from until the mode has set a collective again
+    bankState.thrustDemand = 0.0f;
     bankState.filtersValid = false;
     bankState.lastUpdateUs = 0;
     bankState.started = false;
@@ -377,6 +425,12 @@ static void bankReset(void)
 
 void bankModeUpdate(timeUs_t currentTimeUs)
 {
+    // The learnt thrust-to-weight survives the mode being switched off and on, but not a disarm (new battery, new config)
+    if (!ARMING_FLAG(ARMED)) {
+        bankState.thrustToWeight = 0.0f;
+    }
+    bankThrustToWeight = bankState.thrustToWeight != 0.0f ? bankState.thrustToWeight : bankModeConfig()->thrustToWeight / 100.0f;
+
     bankModeActive = FLIGHT_MODE(BANK_MODE);
     if (!bankModeActive) {
         bankReset();
@@ -415,6 +469,8 @@ void bankModeUpdate(timeUs_t currentTimeUs)
         .yaw = getRcDeflection(FD_YAW),
         .lift = 0.5f * (getRcDeflection(FD_PITCH) + 1.0f),
         .throttleLow = calculateThrottleStatus() == THROTTLE_LOW,
+        .armed = ARMING_FLAG(ARMED),
+        .accZ = acc.accADC.z * acc.dev.acc_1G_rec,
         .dragX = bankState.dragX,
         .dragY = bankState.dragY,
         .measuredPitchDeg = attitude.raw[FD_PITCH] * 0.1f,
@@ -428,6 +484,7 @@ void bankModeUpdate(timeUs_t currentTimeUs)
     bankAngleTargetDeg[FD_PITCH] = outputs.pitchDeg;
     bankYawRateDps = outputs.yawRateDps;
     bankCollective = outputs.collective;
+    bankThrustToWeight = bankState.thrustToWeight;
 }
 
 bool bankModeIsActive(void)
@@ -448,6 +505,11 @@ float bankModeGetYawRate(void)
 float bankModeGetCollective(void)
 {
     return bankCollective;
+}
+
+float bankModeGetThrustToWeight(void)
+{
+    return bankThrustToWeight;
 }
 
 #endif // USE_BANK_MODE

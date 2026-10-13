@@ -51,6 +51,8 @@ typedef struct bankInputs_s {
     float yaw;
     float lift;
     bool throttleLow;
+    bool armed;                 // the thrust-to-weight estimate is only learnt while the motors are running
+    float accZ;                 // specific force along body Z (up), g: the thrust per unit mass
     float dragX;                // filtered specific force along body X (forward), g
     float dragY;                // filtered specific force along body Y (left), g: the "ball"
     float measuredPitchDeg;     // measured attitude, same signs as the targets: pitch positive nose-down
@@ -70,6 +72,9 @@ typedef struct bankState_s {
     float dragX;
     float dragY;
     float ballIntegrator;       // yaw rate held by the ball integrator, degrees per second
+    float thrustToWeight;       // learnt thrust-to-weight ratio, 0 until learning starts (the configured prior is used)
+    float collective;           // collective of the previous update, as applied by the mixer
+    float thrustDemand;         // thrust of the previous update, g
     bool filtersValid;
     bool started;               // the first update since the mode was engaged has been seen
     bool tiltLocked;            // engaged with the throttle low: no tilt until the roll stick is centred
@@ -81,5 +86,6 @@ bool bankModeIsActive(void);
 float bankModeGetAngleTarget(int axis);     // FD_ROLL or FD_PITCH, degrees
 float bankModeGetYawRate(void);             // degrees per second
 float bankModeGetCollective(void);          // 0..1 of maximum thrust
+float bankModeGetThrustToWeight(void);      // thrust-to-weight ratio in use, learnt or configured
 
 #endif // USE_BANK_MODE
