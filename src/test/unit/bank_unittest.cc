@@ -76,7 +76,7 @@ static const float DEG = M_PI / 180.0f;
 TEST(BankModeTest, ConfigDefaults)
 {
     pgResetAll();
-    EXPECT_EQ(200, bankModeConfig()->thrustToWeight);
+    EXPECT_EQ(300, bankModeConfig()->thrustToWeight);
     EXPECT_EQ(45, bankModeConfig()->maxBankAngle);
     EXPECT_EQ(30, bankModeConfig()->maxTiltAngle);
     EXPECT_EQ(300, bankModeConfig()->ballKp);
@@ -811,8 +811,8 @@ TEST(BankModeTest, LearnThrustToWeightIsLimitedAroundThePrior)
         high = bankLearnThrustToWeight(high, 2.0f, 3.0f, 0.5f, 1.0f, 0.01f);
         low = bankLearnThrustToWeight(low, 2.0f, 0.2f, 0.5f, 1.0f, 0.01f);
     }
-    EXPECT_NEAR(2.6f, high, 1e-5f);
-    EXPECT_NEAR(1.4f, low, 1e-5f);
+    EXPECT_NEAR(3.2f, high, 1e-5f);
+    EXPECT_FLOAT_EQ(1.0f, low);   // 2.0 * (1 - 0.6) = 0.8, held at the 1 g floor
     // never below 1: the craft cannot be asked to hover on more than all of its thrust
     EXPECT_FLOAT_EQ(1.0f, bankLearnThrustToWeight(1.1f, 1.1f, 0.2f, 0.9f, 1.0f, 10.0f));
 }

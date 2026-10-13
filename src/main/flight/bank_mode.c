@@ -149,7 +149,7 @@
 #define BANK_TW_FILTER_HZ       0.2f    // cutoff of the thrust-to-weight learning filter
 #define BANK_TW_LEARN_WINDOW    0.3f    // g of thrust above 1 g that is still learnt from
 #define BANK_TW_LEARN_TOLERANCE 1e-3f   // g of thrust below 1 g that is still learnt from (rounding at the centre)
-#define BANK_TW_RANGE           0.3f    // the estimate stays within this fraction of the configured value
+#define BANK_TW_RANGE           0.6f    // the estimate stays within this fraction of the configured value
 
 static bankState_t bankState;
 
