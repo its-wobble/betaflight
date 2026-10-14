@@ -112,6 +112,7 @@ RUN groupadd --gid $USER_GID $USERNAME && \
 # WebFPVSimulator tooling (browser FPV sim that compiles Betaflight to WASM)
 # nodejs --> sim requires Node >= 22, Debian trixie ships 20, so use NodeSource
 # chromium --> headless browser for the sim's verify/shots/lint checks
+# xvfb --> virtual X display; Debian's Chromium needs X11 for WebGL even headless
 # emsdk --> Emscripten pinned to the version the sim is built with
 ARG NODE_MAJOR=22
 ARG EMSDK_VERSION=3.1.61
@@ -120,6 +121,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - && \
     nodejs \
     chromium \
     fonts-liberation \
+    xvfb \
+    xauth \
     python3 && \
     rm -rf /var/lib/apt/lists/*
 RUN git clone --depth 1 https://github.com/emscripten-core/emsdk.git /opt/emsdk && \

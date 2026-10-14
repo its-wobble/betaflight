@@ -19,9 +19,12 @@
     "BF_BANK_SRC": "/workspaces/betaflight",
     "SIM_DIR": "/home/devpod/WebFPVSimulator",
     "SIM_REPO": "https://github.com/its-wobble/WebFPVSimulator.git",
-    "SIM_BRANCH": "banked-mode-sim-2"
+    "SIM_BRANCH": "banked-mode-sim-2",
+    // Virtual display started by start-xvfb.sh, so headless Chromium has WebGL
+    "DISPLAY": ":99"
   },
   "postCreateCommand": "bash .devcontainer/setup-sim.sh",
+  "postStartCommand": "bash .devcontainer/start-xvfb.sh",
   // WebFPVSimulator dev server (npm run serve)
   "forwardPorts": [8000]
 }
