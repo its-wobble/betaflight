@@ -6,10 +6,22 @@
   },
   "privileged": true,
   "runArgs": [
-    //  "--userns=host", // <== use this for docker
-     "--userns=keep-id", // <== use this for podman
+     "--userns=host", // <== use this for docker
+    //  "--userns=keep-id", // <== use this for podman
      "--volume=/dev:/dev"
   ],
   "remoteUser": "devpod",
-  "features": {}
+  "features": {},
+  // The WebFPVSimulator is cloned on create (no volume: commit and push sim
+  // work, a rebuild starts from the remote). BF_BANK_SRC is where the sim's
+  // bank overlay (scripts/bank-sync.sh) reads the bank mode sources from.
+  "containerEnv": {
+    "BF_BANK_SRC": "/workspaces/betaflight",
+    "SIM_DIR": "/home/devpod/WebFPVSimulator",
+    "SIM_REPO": "https://github.com/its-wobble/WebFPVSimulator.git",
+    "SIM_BRANCH": "banked-mode-sim-2"
+  },
+  "postCreateCommand": "bash .devcontainer/setup-sim.sh",
+  // WebFPVSimulator dev server (npm run serve)
+  "forwardPorts": [8000]
 }

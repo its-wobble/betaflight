@@ -109,6 +109,27 @@ RUN groupadd --gid $USER_GID $USERNAME && \
     useradd --uid $USER_UID --gid $USER_GID -m $USERNAME --shell /bin/bash && \
     echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
+# WebFPVSimulator tooling (browser FPV sim that compiles Betaflight to WASM)
+# nodejs --> sim requires Node >= 22, Debian trixie ships 20, so use NodeSource
+# chromium --> headless browser for the sim's verify/shots/lint checks
+# emsdk --> Emscripten pinned to the version the sim is built with
+ARG NODE_MAJOR=22
+ARG EMSDK_VERSION=3.1.61
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - && \
+    apt-get install -y --no-install-recommends \
+    nodejs \
+    chromium \
+    fonts-liberation \
+    python3 && \
+    rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 https://github.com/emscripten-core/emsdk.git /opt/emsdk && \
+    cd /opt/emsdk && \
+    ./emsdk install ${EMSDK_VERSION} && \
+    ./emsdk activate ${EMSDK_VERSION} && \
+    chown -R $USERNAME:$USERNAME /opt/emsdk
+ENV EMSDK=/opt/emsdk \
+    SIM_CHROME_BIN=/usr/bin/chromium
+
 # Switch to non-root user
 USER $USERNAME
 
