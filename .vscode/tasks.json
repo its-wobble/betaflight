@@ -1,0 +1,44 @@
+{
+  // WebFPVSimulator tasks (see BANK-MODE.md in the sim repo). The server
+  // opens the bank firmware by default once dist/sim-bank.wasm exists:
+  // http://localhost:8000/ (port 8000 is forwarded by the devcontainer).
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Sim: build bank firmware and serve",
+      "detail": "Sync bank mode from this tree, build sim-bank.wasm, then npm run serve",
+      "type": "shell",
+      "command": "npm run build:wasm:bank && npm run serve",
+      "options": { "cwd": "${env:SIM_DIR}" },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "webfpvsim",
+        "pattern": { "regexp": "^__never_matches__$" },
+        "background": {
+          "activesBegin": true,
+          "beginsPattern": "^> webfpvsimulator@",
+          "endsPattern": "^WebFPVSimulator: http"
+        }
+      },
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Sim: serve",
+      "detail": "npm run serve with whatever is already built",
+      "type": "shell",
+      "command": "npm run serve",
+      "options": { "cwd": "${env:SIM_DIR}" },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "webfpvsim",
+        "pattern": { "regexp": "^__never_matches__$" },
+        "background": {
+          "activesBegin": true,
+          "beginsPattern": "^> webfpvsimulator@",
+          "endsPattern": "^WebFPVSimulator: http"
+        }
+      },
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    }
+  ]
+}

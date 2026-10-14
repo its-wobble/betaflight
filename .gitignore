@@ -40,8 +40,9 @@ stm32.mak
 # local scripts
 /support/scripts
 
-# artefacts for VS Code
-/.vscode/
+# artefacts for VS Code (tasks.json kept: WebFPVSimulator tasks for bank mode)
+/.vscode/*
+!/.vscode/tasks.json
 
 # artefacts for Visual Studio
 /.vs
