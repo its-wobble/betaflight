@@ -22,3 +22,7 @@ The simulator lives at `$SIM_DIR` (default `/home/devpod/WebFPVSimulator`). It c
 The harness checks behaviour the spec promises (zero vertical acceleration at lift centre, ball centred, coordinated turn, head check keeps the track, braking, determinism). It runs on the plant's true attitude and a clean accelerometer, so it is optimistic. Report the table, the known limits, and leave feel to the owner: `npm run serve` in the sim, open `/?fw=bank`, press B in flight.
 
 Do not change `tests/bank-thresholds.json` to get a pass. If a band contradicts the spec or physics, say so and let the owner decide.
+
+## Browser checks
+
+`bank:cycle` is Node only. The sim's browser checks (`lint:shell`, `lint:input`, `shots.js`) run headless Chromium, which needs an X display for WebGL. `SIM_CHROME_BIN` points at `.devcontainer/chromium-xvfb.sh`, which starts Xvfb on `:99` before launching Chromium. If `echo $SIM_CHROME_BIN` shows `/usr/bin/chromium` (a container built before that change), run `bash /workspaces/betaflight/.devcontainer/start-xvfb.sh` first. Do not rely on a lifecycle hook to start it: `postStartCommand` did not start Xvfb after a rebuild.

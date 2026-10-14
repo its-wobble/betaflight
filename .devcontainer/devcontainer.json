@@ -20,11 +20,12 @@
     "SIM_DIR": "/home/devpod/WebFPVSimulator",
     "SIM_REPO": "https://github.com/its-wobble/WebFPVSimulator.git",
     "SIM_BRANCH": "banked-mode-sim-2",
-    // Virtual display started by start-xvfb.sh, so headless Chromium has WebGL
-    "DISPLAY": ":99"
+    // Headless Chromium needs an X display for WebGL. The browser checks
+    // launch it through chromium-xvfb.sh, which starts Xvfb on this display.
+    "DISPLAY": ":99",
+    "SIM_CHROME_BIN": "/workspaces/betaflight/.devcontainer/chromium-xvfb.sh"
   },
   "postCreateCommand": "bash .devcontainer/setup-sim.sh",
-  "postStartCommand": "bash .devcontainer/start-xvfb.sh",
   // WebFPVSimulator dev server (npm run serve)
   "forwardPorts": [8000]
 }
