@@ -8,6 +8,18 @@ The current work is a **new flight mode, "bank"** (spec and plan in [project_pla
 
 **Testing in the simulator**: the bank mode is flown end to end in the WebFPVSimulator (`/home/devpod/WebFPVSimulator`, cloned by `.devcontainer/setup-sim.sh`). After any bank mode change, follow the `bank-sim-loop` skill (`.claude/skills/bank-sim-loop/SKILL.md`): `make test_bank_unittest`, then `npm run bank:cycle` in the sim. How to run and fly it by hand: `BANK-MODE.md` in the sim repo.
 
+## Recreating the dev environment
+
+Use this if the container or the simulator checkout breaks. The devcontainer (`.devcontainer/devcontainer.json` + `containerfile`) is the source of truth. It installs the Betaflight toolchain deps (clang-18, libblocksruntime) plus the sim tooling: Node 22, Chromium, Xvfb, and emsdk 3.1.61 in `/opt/emsdk`. `/workspaces/betaflight` is the host checkout and survives a rebuild. **Nothing under `/home/devpod` does**: no volume is mounted, so the sim checkout, `~/.claude` (including Claude's memory) and anything else in the home directory start fresh. Push sim work before you rebuild.
+
+1. **Rebuild the container**: in VS Code run *Dev Containers: Rebuild Container*, or `devpod up . --recreate`. For podman, swap `--userns=host` for `--userns=keep-id` in `devcontainer.json` `runArgs`.
+2. **Simulator checkout**: `postCreateCommand` runs [.devcontainer/setup-sim.sh](/workspaces/betaflight/.devcontainer/setup-sim.sh). It clones `$SIM_REPO` (`its-wobble/WebFPVSimulator`) at branch `$SIM_BRANCH` (`banked-mode-sim-2`) into `$SIM_DIR` (`/home/devpod/WebFPVSimulator`). It then initialises the `vendor/betaflight` submodule (BF 4.5.1, borrowing objects from this repo) and runs `npm ci`. The script is idempotent, so if the clone failed or is half done, run `bash .devcontainer/setup-sim.sh` again. To start the sim from scratch, first check `git -C $SIM_DIR status` and `git -C $SIM_DIR log @{u}..` for unpushed work, then `rm -rf $SIM_DIR` and rerun the script. To also track the original upstream: `git -C $SIM_DIR remote add upstream https://github.com/Mathew-Harvey/WebFPVSimulator.git`.
+3. **Environment**: `devcontainer.json` `containerEnv` sets `BF_BANK_SRC=/workspaces/betaflight` (where `scripts/bank-sync.sh` reads the bank sources), `SIM_DIR`, `SIM_REPO`, `SIM_BRANCH`, `DISPLAY=:99` and `SIM_CHROME_BIN=/workspaces/betaflight/.devcontainer/chromium-xvfb.sh`. If `echo $SIM_DIR $BF_BANK_SRC $SIM_CHROME_BIN` comes back empty (a shell that didn't start from the container env), export them by hand with those values.
+4. **Headless browser**: the sim's browser checks need Xvfb on `:99`. `chromium-xvfb.sh` starts it on demand. If not, run `bash .devcontainer/start-xvfb.sh` (log: `/tmp/xvfb.log`). Don't rely on `postStartCommand`, which didn't start it after a rebuild.
+5. **Claude workspace**: open Claude Code in `/workspaces/betaflight` and add the sim as a second working directory with `claude --add-dir /home/devpod/WebFPVSimulator` (or `/add-dir` inside a session). Both repos are then in scope, and the sim's own skills (`bank-sim-check`, `verify-flight-model`) and `CLAUDE.md` load. The VS Code tasks in [.vscode/tasks.json](/workspaces/betaflight/.vscode/tasks.json) ("Sim: …") run in `${env:SIM_DIR}`.
+6. **Firmware toolchain (optional)**: `make arm_sdk_install`, then `make configs`, are only needed for MCU builds. Unit tests and the sim use the system clang and emsdk.
+7. **Verify**: `make test_bank_unittest`, then `cd $SIM_DIR && npm run bank:cycle` (builds `dist/sim-bank.wasm` and flies the scripted sortie). Then `npm run serve` and open `http://localhost:8000/?fw=bank` (port 8000 is forwarded) to fly by hand.
+
 ## Build, test, lint
 
 Run from the repo root.
