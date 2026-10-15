@@ -8,6 +8,12 @@ The current work is a **new flight mode, "bank"** (spec and plan in [project_pla
 
 **Testing in the simulator**: the bank mode is flown end to end in the WebFPVSimulator (`/home/devpod/WebFPVSimulator`, cloned by `.devcontainer/setup-sim.sh`). After any bank mode change, follow the `bank-sim-loop` skill (`.claude/skills/bank-sim-loop/SKILL.md`): `make test_bank_unittest`, then `npm run bank:cycle` in the sim. How to run and fly it by hand: `BANK-MODE.md` in the sim repo.
 
+**The owner's flights**: when the owner flies `?fw=bank` (`npm run serve` in the sim), the page records the flight and posts it to `$SIM_DIR/testing-flight-logs/auto/` once a second, with the firmware's targets, collective, thrust to weight and `DEBUG_BANK` fields. `npm run bank:log` in the sim summarises the newest log, `--rows FROM TO` dumps frames, and `--replay` flies the logged sticks headless through the current firmware (see "Reading a flight log" in `BANK-MODE.md`). Read the log before guessing: scripted sorties have twice missed what the owner's sticks provoked. The folder is gitignored and does not survive a container rebuild.
+
+**Simulator gravity**: the shell flies the five inch at 1.62 g (its Weight 100), and the sim's bank accelerometer reads in that local g, so a hover reads 1 g as on Earth. A check flown at the module's default 1.0 g, or in free air rather than from the ground, does not see what the owner flies; `bank-check.js` and `bank-log.js --replay` both set the five inch's gravity and a ground plane.
+
+**Review**: the owner reviews changes before anything is committed. Do not commit in either repo unless asked.
+
 ## Recreating the dev environment
 
 Use this if the container or the simulator checkout breaks. The devcontainer (`.devcontainer/devcontainer.json` + `containerfile`) is the source of truth. It installs the Betaflight toolchain deps (clang-18, libblocksruntime) plus the sim tooling: Node 22, Chromium, Xvfb, and emsdk 3.1.61 in `/opt/emsdk`. `/workspaces/betaflight` is the host checkout and survives a rebuild. **Nothing under `/home/devpod` does**: no volume is mounted, so the sim checkout, `~/.claude` (including Claude's memory) and anything else in the home directory start fresh. Push sim work before you rebuild.

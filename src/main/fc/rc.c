@@ -671,10 +671,11 @@ FAST_CODE void processRcCommand(void)
             }
 
 #ifdef USE_BANK_MODE
-            if ((axis == FD_YAW) && FLIGHT_MODE(BANK_MODE)) {
-                // Bank mode steers the yaw: the nose follows the direction of travel. The yaw stick is the
-                // bank command, which the bank logic reads from the deflection, so it is not also a rate here.
-                angleRate = bankModeGetYawRate();
+            if (FLIGHT_MODE(BANK_MODE)) {
+                // Bank mode owns all three axes. Its sticks are speed, bank, lift and head check, which it reads from
+                // the deflection, so none of them is also a rate here: roll and pitch are levelled to its own angle
+                // targets (no stick setpoint for feedforward or crash detection to see), and the yaw follows the travel.
+                angleRate = (axis == FD_YAW) ? bankModeGetYawRate() : 0.0f;
             }
 #endif
 
@@ -684,8 +685,8 @@ FAST_CODE void processRcCommand(void)
 #ifdef USE_FEEDFORWARD
             calculateFeedforward(&pidRuntime, axis);
 #ifdef USE_BANK_MODE
-            if ((axis == FD_YAW) && FLIGHT_MODE(BANK_MODE)) {
-                feedforwardRaw[axis] = 0.0f;
+            if (FLIGHT_MODE(BANK_MODE)) {
+                feedforwardRaw[axis] = 0.0f;    // the bank yaw rate is computed, not a stick to anticipate
             }
 #endif
 #endif // USE_FEEDFORWARD

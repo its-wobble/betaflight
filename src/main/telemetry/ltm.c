@@ -173,7 +173,7 @@ static void ltm_sframe(void)
         lt_flightmode = 0;
     else if (FLIGHT_MODE(HEADFREE_MODE))
         lt_flightmode = 4;
-    else if (FLIGHT_MODE(ANGLE_MODE | BANK_MODE))
+    else if (FLIGHT_MODE(ANGLE_MODE))
         lt_flightmode = 2;
     else if (FLIGHT_MODE(HORIZON_MODE))
         lt_flightmode = 3;

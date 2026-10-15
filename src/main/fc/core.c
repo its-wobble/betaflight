@@ -1036,13 +1036,11 @@ void processRxModes(timeUs_t currentTimeUs)
 
     bool canUseHorizonMode = true;
 
-    // BANK is an alternative attitude mode, like ANGLE and HORIZON, and can be switched in flight.
-    // Failsafe, GPS rescue, altitude hold and position hold take priority over it, and while it is
-    // active it takes priority over the ANGLE and HORIZON switches. Those flags are from the previous cycle.
-    // OPEN: how BANK should interact with HEADFREE and arming, and whether it can coexist with ALT_HOLD/POS_HOLD.
-    bool bankModeRequested = false;
+    // BANK is a self-levelling mode built on ANGLE, like ALT_HOLD and POS_HOLD, and can be switched in flight.
+    // Failsafe, GPS rescue, altitude hold and position hold take priority over it. Those flags are from the
+    // previous cycle. OPEN: how BANK should interact with HEADFREE and arming.
 #ifdef USE_BANK_MODE
-    bankModeRequested = IS_RC_MODE_ACTIVE(BOXBANK)
+    const bool bankModeRequested = IS_RC_MODE_ACTIVE(BOXBANK)
         && sensors(SENSOR_ACC)
         && !isFixedWing()
         && !featureIsEnabled(FEATURE_3D)
@@ -1058,8 +1056,11 @@ void processRxModes(timeUs_t currentTimeUs)
     bankModeUpdate(currentTimeUs);
 #endif
 
-    if (((IS_RC_MODE_ACTIVE(BOXANGLE) && !bankModeRequested)
+    if ((IS_RC_MODE_ACTIVE(BOXANGLE)
         || failsafeIsActive()
+#ifdef USE_BANK_MODE
+        || FLIGHT_MODE(BANK_MODE)
+#endif
 #ifdef USE_ALTITUDE_HOLD
         || FLIGHT_MODE(ALT_HOLD_MODE)
 #endif
@@ -1266,7 +1267,7 @@ void processRxModes(timeUs_t currentTimeUs)
     }
 #endif
 
-    if (IS_RC_MODE_ACTIVE(BOXHORIZON) && canUseHorizonMode && !bankModeRequested && sensors(SENSOR_ACC)) {
+    if (IS_RC_MODE_ACTIVE(BOXHORIZON) && canUseHorizonMode && sensors(SENSOR_ACC)) {
         DISABLE_FLIGHT_MODE(ANGLE_MODE);
         if (!FLIGHT_MODE(HORIZON_MODE)) {
             ENABLE_FLIGHT_MODE(HORIZON_MODE);
@@ -1285,7 +1286,7 @@ void processRxModes(timeUs_t currentTimeUs)
     }
 #endif
 
-    if (FLIGHT_MODE(ANGLE_MODE | ALT_HOLD_MODE | POS_HOLD_MODE | HORIZON_MODE | BANK_MODE)) {
+    if (FLIGHT_MODE(ANGLE_MODE | ALT_HOLD_MODE | POS_HOLD_MODE | HORIZON_MODE)) {
         LED1_ON;
         // increase frequency of attitude task to reduce drift when in angle or horizon mode
         rescheduleTask(TASK_ATTITUDE, TASK_PERIOD_HZ(acc.sampleRateHz / (float)imuConfig()->imu_process_denom));

@@ -15,7 +15,8 @@ The simulator lives at `$SIM_DIR` (default `/home/devpod/WebFPVSimulator`). It c
 4. If it reports **DRIFT**, you added, removed or changed a hook in a file the sim compiles. Port the same change to the sim's 4.5.1 patch, as the sim skill describes, then `bash scripts/bank-sync.sh --accept`.
 5. If it fails to **compile**, `bank_mode.c` is using a master-only API. Add a mapping to `patches/bank/compat.sed` or a define in `scripts/build-wasm.sh`. Do not change the firmware to suit 4.5.1.
 6. Read failing rows with `npm run check:bank -- --explore`. Fix the firmware, then repeat from 2.
-7. If the sim repo changed, commit and push it. There is no volume, so a container rebuild re-clones it.
+7. If the owner reported a problem from a flight, read their log first: `npm run bank:log` (newest log in `testing-flight-logs/auto/`), `--rows FROM TO` for the frames, and `--replay` to fly those sticks through the build you just made. A fix is done when the replay no longer shows it and `bank:cycle` still passes.
+8. If the sim repo changed, and the owner has asked for commits, commit and push it. There is no volume, so a container rebuild re-clones it and loses anything unpushed.
 
 ## What a pass means
 

@@ -1241,7 +1241,7 @@ const clivalue_t valueTable[] = {
 #ifdef USE_BANK_MODE
 // PG_BANK_MODE_CONFIG
     { "bank_thrust_to_weight",      VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 110, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, thrustToWeight) },
-    { "bank_max_bank_angle",        VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 5, 80 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, maxBankAngle) },
+    { "bank_max_bank_angle",        VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 5, 90 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, maxBankAngle) },
     { "bank_max_tilt_angle",        VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 5, 60 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, maxTiltAngle) },
     { "bank_stick_deadband",        VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 0, 25 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, stickDeadband) },
     { "bank_head_check_range",      VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 0, 180 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, headCheckRange) },

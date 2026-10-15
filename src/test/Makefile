@@ -68,6 +68,8 @@ atomic_unittest_SRC := \
 
 bank_unittest_SRC := \
 		$(USER_DIR)/flight/bank_mode.c \
+		$(USER_DIR)/common/filter.c \
+		$(USER_DIR)/common/maths.c \
 		$(USER_DIR)/pg/bank_mode.c \
 		$(USER_DIR)/pg/pg.c \
 		$(USER_DIR)/common/crc.c \
