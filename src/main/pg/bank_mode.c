@@ -31,7 +31,7 @@
 PG_REGISTER_WITH_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig, PG_BANK_MODE_CONFIG, 2);
 
 PG_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig,
-                  .thrustToWeight = 600,
+                  .thrustToWeight = 570,          // the simulator's five inch, measured in a hover on a full pack
                   .maxBankAngle = 90,
                   .maxTiltAngle = 30,
                   .stickDeadband = 5,

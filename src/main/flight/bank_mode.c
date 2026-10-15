@@ -90,18 +90,10 @@
  *   The collective is always computed from the limited tilt, never taken from the stick:
  *     T = (1 + Fz) / (cos(theta) * cos(phi)),  collective = (T / Tmax) ^ (1 / 1.5)   // thrust ~ collective ^ 1.5
  *
- *   Thrust-to-weight (Tmax) is learnt in flight, so the centre of the lift stick holds the height without having to
- *   guess it. The accelerometer, projected onto the earth vertical with the measured attitude, gives the vertical
- *   force in g; divided by the cosine of the tilt it is the thrust that holds that vertical force:
- *     Tmax = lowpass((u . acc) / (uz * collective ^ 1.5))   // u = earth vertical in the body frame, uz = cos(pitch) * cos(roll)
- *   learnt only while armed and T is between 1 g and 3 g (a 70 degree bank). Body Z alone (accZ / collective) is not
- *   used: in forward flight the rotor drag lies in the tilted rotor plane and holds part of the weight, so accZ reads
- *   less thrust than the height needs and the craft would climb.
- *   Learning only near 1 g makes Tmax the value that hovers at the centre of the stick, whatever the shape of the
- *   thrust curve. On the ground the accelerometer reads 1 g whatever the collective, so with T = 1 g the estimate
- *   holds, and with the stick above the centre (T > 1 g) it can only fall, until the craft lifts off and the real
- *   thrust is measured. bank_thrust_to_weight is the starting value, and the
- *   estimate is kept within a factor of 2.5 of it. It is reset on disarm.
+ *   Thrust-to-weight (Tmax) is the setting bank_thrust_to_weight, fixed: nothing is learnt in flight. Set it from a
+ *   steady hover at the centre of the lift stick, Tmax = 1 / collective ^ 1.5, so the centre gives 1 g. As the battery
+ *   drains the props make less thrust for the same collective and the centre sinks slowly.
+ *   A fast thrust trim (bankUpdateThrustTrim()) takes off quick excesses of vertical force, such as braking from speed.
  *
  *   Forward speed (throttle stick): the speed is in g of drag, the horizontal thrust that holds it in steady flight,
  *   so no m/s calibration is needed. It comes from the same filtered accelerometer drag as the ball. The rotor drag
@@ -145,14 +137,15 @@
  *   - The speed is only as good as the linear rotor-drag model. Body drag adds a v^2 term at high speed, so the
  *     stick-to-speed scale is non-linear, but it is monotonic and zero at zero speed.
  *   - Accelerometer bias reads as speed. The speed deadband hides small bias; a larger one leaves a slow drift.
- *   - The 2 Hz drag filter adds lag, so a high Kp can oscillate. The vertical speed's share of the drag is taken out
- *     with the estimated vertical speed, so it is only as good as that estimate.
+ *   - The 2 Hz drag filter adds lag, so a high Kp can oscillate. A climb or a sink with the craft tilted puts air
+ *     across the rotors too, and that drag reads as speed or slip: there is no vertical speed estimate to take it out.
  *   - The head check offset only enters by rotating the ball, it is not tracked as an angle.
- *   - The vertical speed is the accelerometer integrated, with a slow leak: the damping at the centre of the lift
- *     stick stops climbs and sinks, but a height lost or gained is not recovered (no baro).
- *   - The learner trusts the measured attitude. An attitude estimate pulled by sustained drag tilts the projection.
+ *   - The lift stick is a force, not a vertical speed: the centre holds 1 g, so a climb or a sink carries on until the
+ *     pilot stops it. Nothing holds the height or the vertical speed (no baro, no vertical speed estimate).
+ *   - The thrust per collective is fixed, but in a climb, in fast forward flight and as the battery sags the props
+ *     make less of it, so the centre of the lift stick sinks a little there.
  *   - The thrust curve is taken as collective ^ 1.5. A craft whose curve differs gets a slightly different thrust
- *     away from where Tmax was last learnt.
+ *     away from the hover, where Tmax was measured.
  *
  * OPEN: interaction with HEADFREE and arming; coexistence with ALT_HOLD/POS_HOLD (they currently cancel BANK).
  */
@@ -164,26 +157,22 @@
 #define BANK_MIN_TILT_COS       1e-3f
 #define BANK_MIN_FLIP_DRAG      0.01f   // g of rearward drag before the ball sign starts to flip
 #define BANK_MIN_LIFT           0.1f    // lowest lift, in g, used to turn a horizontal force into a tilt
-#define BANK_TW_FILTER_HZ       0.2f    // cutoff of the thrust-to-weight learning filter
-#define BANK_TW_LEARN_WINDOW    2.0f    // g of thrust above 1 g that is still learnt from (a 70 degree bank)
-#define BANK_TW_LEARN_TOLERANCE 1e-3f   // g of thrust below 1 g that is still learnt from (rounding at the centre)
-#define BANK_TW_RANGE           2.5f    // the estimate stays within this factor of the configured value
-#define BANK_TW_LEARN_MIN_TILT_COS 0.25f // no learning when tilted more than 75 degrees
-#define BANK_GRAVITY_MSS        9.80665f
+#define BANK_TRIM_MIN_TILT_COS  0.25f   // the thrust trim is not measured when tilted more than 75 degrees
+#define BANK_TRIM_FILTER_HZ     3.0f    // cutoff of the fast thrust trim
+#define BANK_TRIM_LAG_HZ        10.0f   // the motors' and the accelerometer filter's lag, put on the modelled thrust
+#define BANK_TRIM_MAX           2.0f    // the trim only ever takes thrust off, by up to this factor (see bankUpdateThrustTrim())
+#define BANK_TRIM_MIN_LIFT      0.3f    // g of modelled vertical force below which the trim is not measured (free fall, idle)
+#define BANK_TRIM_LEAK_S        1.0f    // time constant the trim goes back to 1 with, so the ground cannot hold it off 1
 #define BANK_TILT_THRUST_SHARE  0.75f   // share of the thrust above the vertical force that bank and forward tilt may use
 #define BANK_TURN_RATE_SHARE    0.8f    // share of bank_yaw_max_rate a coordinated turn may need, the rest is for the ball
 #define BANK_MIN_BANK_LIMIT_DEG 30.0f   // the speed limit on the bank never goes below this, so a bank from the hover still moves
 #define BANK_THRUST_EXPONENT    1.5f    // thrust ~ collective ^ this: props make thrust ~ rpm^2, and rpm is not linear in the command
-#define BANK_VZ_DAMPING_FADE    0.3f    // lift stick deflection past the deadband over which the vertical damping fades out
 #define BANK_DRAG_MIN_THRUST    0.25f   // g: the lowest thrust the rotor drag is normalised by
 #define BANK_TURN_GAIN_PRIOR    19.0f   // deg/s * g: g * (g of drag per m/s) of a 5 inch, the starting turn gain
 #define BANK_TURN_GAIN_RANGE    4.0f    // the learnt turn gain stays within this factor of the prior
 #define BANK_TURN_MIN_SPEED     0.1f    // g of drag: below this the feedforward fades out to nothing at rest
 #define BANK_TURN_LEARN_TAU_S   2.0f    // how fast the ball integrator is moved into the turn gain
 #define BANK_TURN_LEARN_MIN_TAN 0.18f   // tan(10 degrees): the turn gain is only learnt in a real bank
-#define BANK_VZ_LEAK_S          60.0f   // time constant that the vertical speed estimate forgets with
-#define BANK_VZ_DAMPING         0.1f    // g of lift per m/s of vertical speed at the centre of the lift stick
-#define BANK_VZ_DAMPING_MAX     0.5f    // g, limit of that correction
 
 static bankState_t bankState;
 
@@ -226,7 +215,7 @@ STATIC_UNIT_TESTED float bankLiftFromStick(float stick, float thrustToWeight)
 // would share out all of it, but then a bank set steeper than the thrust allows rides the limit with the collective at
 // full, and the mixer has no motor that can speed up: the attitude loop loses half its authority just when the craft
 // is banked hardest (in the simulator, a full bank at medium speed overshot to 84 deg and rolled over). The reserve is
-// also what the vertical damping and an over-learnt thrust-to-weight are corrected with.
+// also what a thrust-to-weight set too high is corrected with.
 STATIC_UNIT_TESTED float bankLimitTilt(float fz, float *theta, float *phi, float thrustToWeight)
 {
     const float tw = fmaxf(thrustToWeight, 1.0f);
@@ -246,8 +235,7 @@ STATIC_UNIT_TESTED float bankLimitTilt(float fz, float *theta, float *phi, float
 }
 
 // The thrust curve: thrust (g) = thrustToWeight * collective ^ BANK_THRUST_EXPONENT. A straight line would make a
-// thrust-to-weight learnt at one operating point wrong at the others: learnt in a 2 g turn it would be too high back at
-// the hover, and the craft would sink after every turn until it had been learnt again.
+// thrust-to-weight measured at the hover wrong in a 2 g turn.
 STATIC_UNIT_TESTED float bankThrustFromCollective(float collective, float thrustToWeight)
 {
     return thrustToWeight * powf(fmaxf(collective, 0.0f), BANK_THRUST_EXPONENT);
@@ -275,48 +263,26 @@ STATIC_UNIT_TESTED float bankCalcVerticalForce(float accX, float accY, float acc
     return -sinf(theta) * accX + cosTheta * sinf(phi) * accY + cosTheta * cosf(phi) * accZ;
 }
 
-// The thrust, in g, that would give the measured vertical specific force if all of it came from the rotors:
-// the accelerometer reading projected onto the earth vertical, divided by the cosine of the tilt. Body Z alone is not
-// enough in forward flight: the rotor drag lies in the rotor plane, so when the craft is tilted part of it holds the
-// craft up (or pulls it down), and body Z would read less thrust than the height needs. The vertical in the body
-// frame is u = (-sin(pitch), cos(pitch) * sin(roll), cos(pitch) * cos(roll)), as in bankRotateTilt().
-// verticalForce is from bankCalcVerticalForce(). Returns 0 when the craft is tilted further than
-// BANK_TW_LEARN_MIN_TILT_COS allows, so nothing is learnt.
-STATIC_UNIT_TESTED float bankCalcVerticalThrust(float verticalForce, float pitchDeg, float rollDeg)
+// Fast thrust trim: how much more vertical force the craft makes than the collective was set for, at
+// BANK_TRIM_FILTER_HZ, dividing the thrust the collective asks for. It takes off two quick balloons with the lift stick
+// centred, where the fixed thrust-to-weight is wrong for a moment:
+//   - braking from speed, the rotors tilt back into the air and make up to 1.6 times the modelled thrust (5 m/s of
+//     climb in the simulator);
+//   - rolling into a bank, the collective rises by 1 / cos(tilt) at once, while the craft is still nearly level.
+// verticalForce is measured (bankCalcVerticalForce()); modelVertical is the model's vertical force for the
+// collective sent at the commanded tilt, lagged like the motors (state->trimModelVertical).
+// The trim only takes thrust off (trim >= 1). On the ground with the lift stick above the centre the craft reads less
+// than it asks, and a trim that added thrust there would launch it on lift-off. It always leaks back to 1: resting on
+// the ground the accelerometer reads 1 g whatever the collective, so any trim measures as right there and would be
+// held off 1 until lift-off. It corrects quick excesses, not a thrust-to-weight set wrong or the battery sagging.
+// Without a measurement (mixer saturated, tilted past 75 degrees, too little lift to measure) it only leaks.
+STATIC_UNIT_TESTED float bankUpdateThrustTrim(float trim, float verticalForce, float modelVertical, bool measurable, float dt)
 {
-    const float uz = cosf(DEGREES_TO_RADIANS(pitchDeg)) * cosf(DEGREES_TO_RADIANS(rollDeg));
-    if (uz < BANK_TW_LEARN_MIN_TILT_COS) {
-        return 0.0f;
+    if (measurable && modelVertical >= BANK_TRIM_MIN_LIFT) {
+        const float target = constrainf(verticalForce / modelVertical, 1.0f, BANK_TRIM_MAX);
+        trim += pt1FilterGain(BANK_TRIM_FILTER_HZ, dt) * (target - trim);
     }
-    return verticalForce / uz;
-}
-
-// Vertical speed, m/s up, from the vertical specific force: the accelerometer integrated, with a slow leak so that
-// accelerometer bias and noise cannot run it away. It only has to see the climbs and sinks the pilot or a manoeuvre
-// starts, for the damping at the centre of the lift stick: a steady bias is taken out by the thrust-to-weight learner.
-STATIC_UNIT_TESTED float bankUpdateVerticalSpeed(float verticalSpeed, float verticalForce, float dt)
-{
-    return verticalSpeed + ((verticalForce - 1.0f) * BANK_GRAVITY_MSS - verticalSpeed / BANK_VZ_LEAK_S) * dt;
-}
-
-// Extra lift, in g, that brings the vertical speed back to zero at the centre of the lift stick.
-STATIC_UNIT_TESTED float bankVerticalDamping(float verticalSpeed)
-{
-    return constrainf(-BANK_VZ_DAMPING * verticalSpeed, -BANK_VZ_DAMPING_MAX, BANK_VZ_DAMPING_MAX);
-}
-
-// Learns the thrust-to-weight ratio from the accelerometer. verticalThrust (from bankCalcVerticalThrust()) is the
-// thrust in g that holds the measured vertical force, and verticalThrust / collective is the thrust a full collective
-// would give, measured at this operating point. thrustDemand and collective are those of the previous update, the ones
-// the accelerometer is responding to. Only learnt between 1 g and 1 g + BANK_TW_LEARN_WINDOW of thrust: the neutral
-// lift stick, up to a 70 degree bank. Returns the new estimate, kept within a factor BANK_TW_RANGE of the configured prior.
-STATIC_UNIT_TESTED float bankLearnThrustToWeight(float estimate, float prior, float verticalThrust, float collective, float thrustDemand, float dt)
-{
-    if (thrustDemand < 1.0f - BANK_TW_LEARN_TOLERANCE || thrustDemand > 1.0f + BANK_TW_LEARN_WINDOW || verticalThrust <= 0.0f) {
-        return estimate;
-    }
-    estimate += pt1FilterGain(BANK_TW_FILTER_HZ, dt) * (verticalThrust / bankThrustFromCollective(collective, 1.0f) - estimate);
-    return constrainf(estimate, fmaxf(prior / BANK_TW_RANGE, 1.0f), prior * BANK_TW_RANGE);
+    return trim + dt / BANK_TRIM_LEAK_S * (1.0f - trim);
 }
 
 // Moves the head-check offset towards the target by at most rate * dt. Returns the new offset.
@@ -354,8 +320,8 @@ STATIC_UNIT_TESTED void bankRotateTilt(float *theta, float *phi, float offset)
 // The rotor drag lies in the rotor plane and opposes the velocity there. Taking the velocity as horizontal, the
 // heading's forward axis is (cos(pitch), sin(roll) * sin(pitch), ...) and its left axis (0, cos(roll), ...) in the body
 // frame, so a pitched and banked craft sees part of its forward drag on body Y. Without this, that part would read as
-// slip and the ball would centre with the nose off the track. The vertical speed's share is taken out before this, by
-// bankRemoveVerticalDrag().
+// slip and the ball would centre with the nose off the track. A climb or a sink also puts air across a tilted rotor
+// plane; there is no vertical speed estimate, so that share stays in.
 STATIC_UNIT_TESTED void bankDragToLevelFrame(float dragX, float dragY, float pitch, float roll, float *forward, float *left)
 {
     *forward = dragX / fmaxf(cosf(pitch), BANK_MIN_TILT_COS);
@@ -372,17 +338,6 @@ STATIC_UNIT_TESTED float bankDragThrustScale(float thrust)
         return 1.0f;
     }
     return 1.0f / sqrtf(fmaxf(thrust, BANK_DRAG_MIN_THRUST));
-}
-
-// Takes the vertical speed out of the body drag. A tilted rotor plane also sees the climb or the sink: rolled 60 degrees,
-// a 1 m/s climb puts 0.87 m/s of air across the rotors sideways, which would read as slip. dragX/dragY are normalised
-// (bankDragThrustScale()), so the drag per m/s is the turn gain's k = turnGain / (g in deg/s units). The earth vertical
-// in the body frame is (-sin(pitch), cos(pitch) * sin(roll)) in the rotor plane.
-STATIC_UNIT_TESTED void bankRemoveVerticalDrag(float *dragX, float *dragY, float pitch, float roll, float verticalSpeed, float turnGain)
-{
-    const float dragPerSpeed = turnGain / (RADIANS_TO_DEGREES(1.0f) * BANK_GRAVITY_MSS);
-    *dragX += dragPerSpeed * verticalSpeed * -sinf(pitch);
-    *dragY += dragPerSpeed * verticalSpeed * cosf(pitch) * sinf(roll);
 }
 
 // Rotates the levelled drag (dragX forward, dragY left, from bankDragToLevelFrame()) into the travel frame. The nose sits at +offset
@@ -498,26 +453,29 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
 {
     const float deadband = config->stickDeadband / 100.0f;
 
-    const float thrustToWeightPrior = config->thrustToWeight / 100.0f;
-    if (state->thrustToWeight == 0.0f) {
-        state->thrustToWeight = thrustToWeightPrior;
-    }
+    const float thrustToWeight = config->thrustToWeight / 100.0f;
     if (state->turnGain == 0.0f) {
         state->turnGain = BANK_TURN_GAIN_PRIOR;
     }
+    if (state->thrustTrim == 0.0f) {
+        state->thrustTrim = 1.0f;
+    }
     if (in->armed) {
         const float verticalForce = bankCalcVerticalForce(in->accX, in->accY, in->accZ, in->measuredPitchDeg, in->measuredRollDeg);
-        state->verticalSpeed = bankUpdateVerticalSpeed(state->verticalSpeed, verticalForce, in->dt);
-        const float verticalThrust = bankCalcVerticalThrust(verticalForce, in->measuredPitchDeg, in->measuredRollDeg);
-        // With the mixer saturated (a hard yaw, a head-check slew, a roll-in) the thrust is not collective * T/W
-        if (!in->motorsSaturated) {
-            state->thrustToWeight = bankLearnThrustToWeight(state->thrustToWeight, thrustToWeightPrior,
-                verticalThrust, state->collective, state->thrustDemand, in->dt);
+        const float measuredTiltCos = cosf(DEGREES_TO_RADIANS(in->measuredPitchDeg)) * cosf(DEGREES_TO_RADIANS(in->measuredRollDeg));
+        const float modelVertical = bankThrustFromCollective(state->collective, thrustToWeight) * state->tiltCos;
+        if (state->trimModelVertical == 0.0f) {
+            state->trimModelVertical = modelVertical;
+        } else {
+            state->trimModelVertical += pt1FilterGain(BANK_TRIM_LAG_HZ, in->dt) * (modelVertical - state->trimModelVertical);
         }
+        // With the mixer saturated (a hard yaw, a head-check slew, a roll-in) the thrust is not collective * T/W
+        state->thrustTrim = bankUpdateThrustTrim(state->thrustTrim, verticalForce, state->trimModelVertical,
+            !in->motorsSaturated && measuredTiltCos >= BANK_TRIM_MIN_TILT_COS, in->dt);
     } else {
-        state->verticalSpeed = 0.0f;
+        state->thrustTrim = 1.0f;
+        state->trimModelVertical = 0.0f;
     }
-    const float thrustToWeight = state->thrustToWeight;
 
     float rollStick = bankShapeStick(in->roll, deadband);
     float speedStick = bankShapeStick(in->speed, deadband);     // 0..1, the deadband is at the bottom
@@ -541,14 +499,10 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     float phi = rollStick * DEGREES_TO_RADIANS(config->maxBankAngle);
     // The lift stick springs back to the centre (hover), so it gets the same deadband there
     const float liftStick = 0.5f * (bankShapeStick(2.0f * in->lift - 1.0f, deadband) + 1.0f);
+    // The stick is the lift force and nothing else: at the centre it asks for no vertical acceleration, so a climb or a
+    // sink carries on until the pilot stops it. There is no vertical speed estimate.
     const float fzStick = bankLiftFromStick(liftStick, thrustToWeight) - 1.0f;
-    // At the centre the stick asks for no vertical acceleration, and the damping also takes off the vertical speed
-    // that a lift input or a manoeuvre left behind, so the craft holds its height instead of carrying on.
-    // It fades out as the stick leaves the centre rather than switching off at the edge of the deadband, which would
-    // step the collective by up to BANK_VZ_DAMPING_MAX every time the stick crossed it.
-    const float liftDamping = 1.0f - fminf(fabsf(2.0f * liftStick - 1.0f) / BANK_VZ_DAMPING_FADE, 1.0f);
-    const float verticalDamping = liftDamping * bankVerticalDamping(state->verticalSpeed);
-    float fz = fzStick + verticalDamping;
+    float fz = fzStick;
 
     // Throttle stick = forward speed along the travel direction (in g of drag, full stick = steady flight at max tilt).
     // The measured speed comes from the drag, levelled with the measured attitude and seen from the travel frame.
@@ -566,7 +520,6 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     const float dragScale = bankDragThrustScale(state->dragThrust);
     float bodyDragX = in->dragX * dragScale;
     float bodyDragY = in->dragY * dragScale;
-    bankRemoveVerticalDrag(&bodyDragX, &bodyDragY, measuredPitch, measuredRoll, state->verticalSpeed, state->turnGain);
     float levelDragX;
     float levelDragY;
     bankDragToLevelFrame(bodyDragX, bodyDragY, measuredPitch, measuredRoll, &levelDragX, &levelDragY);
@@ -585,11 +538,9 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     // forward tilt then shows up as body roll on a straight track
     const float bankTan = tanf(phi);
     state->ballBankTan = bankScaleBallIntegrator(bankTan, state->ballBankTan, &state->ballIntegrator);
-    const float collective = bankCalcCollective(fz, theta, phi, thrustToWeight);
+    const float collective = bankCalcCollective(fz, theta, phi, thrustToWeight * state->thrustTrim);
     state->collective = collective;
-    // The learning window is for the thrust the stick asks for: the damping moves the collective around 1 g at the
-    // centre, and the learner still measures the thrust that collective gives
-    state->thrustDemand = (1.0f + fmaxf(fzStick, -1.0f)) / fmaxf(cosf(theta) * cosf(phi), BANK_MIN_TILT_COS);
+    state->tiltCos = cosf(theta) * cosf(phi);
 
     const float previousOffset = state->headCheckOffset;
     const float offsetTarget = yawStick * DEGREES_TO_RADIANS(config->headCheckRange);
@@ -626,27 +577,25 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
 
     DEBUG_SET(DEBUG_BANK, 0, lrintf(speed * 1000.0f));                       //!< Speed Estimate [unit:0.001g]
     DEBUG_SET(DEBUG_BANK, 1, lrintf(targetSpeed * 1000.0f));                 //!< Target Speed [unit:0.001g]
-    DEBUG_SET(DEBUG_BANK, 2, lrintf(state->verticalSpeed * 100.0f));         //!< Vertical Speed Estimate [unit:0.01m/s]
-    DEBUG_SET(DEBUG_BANK, 3, lrintf(verticalDamping * 1000.0f));             //!< Vertical Damping Lift [unit:0.001g]
-    DEBUG_SET(DEBUG_BANK, 4, lrintf(state->thrustToWeight * 100.0f));        //!< Thrust To Weight [unit:0.01]
+    DEBUG_SET(DEBUG_BANK, 2, lrintf(state->thrustTrim * 1000.0f));           //!< Thrust Trim [unit:0.001]
+    DEBUG_SET(DEBUG_BANK, 4, lrintf(thrustToWeight * 100.0f));               //!< Thrust To Weight [unit:0.01]
     DEBUG_SET(DEBUG_BANK, 5, lrintf(state->turnGain * 10.0f));               //!< Turn Gain [unit:0.1deg/s]
     DEBUG_SET(DEBUG_BANK, 6, lrintf(ball * 1000.0f));                        //!< Ball [unit:0.001g]
     DEBUG_SET(DEBUG_BANK, 7, lrintf(fz * 1000.0f));                          //!< Vertical Force Command [unit:0.001g]
 }
 
-// Everything starts again when the mode is switched on, apart from what has been learnt about the craft. With the
-// collective back at 0 there is nothing to learn from until the mode has set one again.
+// Everything starts again when the mode is switched on, apart from the learnt turn gain. With the collective back at 0
+// there is nothing to learn from until the mode has set one again.
 static void bankReset(void)
 {
-    bankState = (bankState_t){ .thrustToWeight = bankState.thrustToWeight, .turnGain = bankState.turnGain };
+    bankState = (bankState_t){ .turnGain = bankState.turnGain };
     bankOutputs = (bankOutputs_t){ 0 };
 }
 
 void bankModeUpdate(timeUs_t currentTimeUs)
 {
-    // The learnt thrust-to-weight survives the mode being switched off and on, but not a disarm (new battery, new config)
+    // The learnt turn gain survives the mode being switched off and on, but not a disarm (new battery, new config)
     if (!ARMING_FLAG(ARMED)) {
-        bankState.thrustToWeight = 0.0f;
         bankState.turnGain = 0.0f;
     }
 
@@ -724,8 +673,7 @@ float bankModeGetCollective(void)
 
 float bankModeGetThrustToWeight(void)
 {
-    // learnt, or the configured starting value until learning starts (and after a disarm)
-    return bankState.thrustToWeight != 0.0f ? bankState.thrustToWeight : bankModeConfig()->thrustToWeight / 100.0f;
+    return bankModeConfig()->thrustToWeight / 100.0f;
 }
 
 #endif // USE_BANK_MODE

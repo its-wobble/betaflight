@@ -52,7 +52,7 @@ typedef struct bankInputs_s {
     float yaw;
     float lift;
     bool throttleLow;
-    bool armed;                 // the thrust-to-weight estimate is only learnt while the motors are running
+    bool armed;                 // the thrust trim is only measured while the motors are running
     float accX;                 // specific force along body X (forward), g, unfiltered
     float accY;                 // specific force along body Y (left), g, unfiltered
     float accZ;                 // specific force along body Z (up), g, unfiltered
@@ -78,11 +78,11 @@ typedef struct bankState_s {
     float ballIntegrator;       // yaw rate held by the ball integrator, degrees per second
     float turnGain;             // learnt turn feedforward gain, deg/s * g, 0 until the mode first runs
     float ballBankTan;          // tan of the bank the integrator was built for, travel frame, positive to the right
-    float thrustToWeight;       // learnt thrust-to-weight ratio, 0 until learning starts (the configured prior is used)
     float collective;           // collective of the previous update, as applied by the mixer
-    float thrustDemand;         // thrust the lift stick asked for in the previous update, g
     float dragThrust;           // thrust the drag is normalised by, g, filtered like the drag
-    float verticalSpeed;        // estimated vertical speed, m/s up, from the accelerometer
+    float thrustTrim;           // fast trim dividing the collective's thrust, >= 1, 1 = as the thrust-to-weight says, 0 until it starts
+    float trimModelVertical;    // modelled vertical force of the collective sent at the commanded tilt, g, lagged like the motors
+    float tiltCos;              // cos(pitch) * cos(roll) of the previous update's commanded tilt
     bool started;               // the first update since the mode was engaged has been seen
     bool tiltLocked;            // engaged with the throttle low: no tilt until the bank stick is centred
     timeUs_t lastUpdateUs;

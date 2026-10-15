@@ -28,7 +28,7 @@
 #include "pg/pg.h"
 
 typedef struct bankModeConfig_s {
-    uint16_t thrustToWeight;        // max thrust / weight, x100 (200 = 2.0): the starting value, learnt in flight
+    uint16_t thrustToWeight;        // full-collective thrust / weight, x100 (200 = 2.0): 1 / collective^1.5 in a steady hover
     uint8_t maxBankAngle;           // bank angle at full yaw (bank) stick, degrees
     uint8_t maxTiltAngle;           // forward tilt at full speed (throttle) stick, degrees
     uint8_t stickDeadband;          // deadband around stick centre, percent of full deflection
