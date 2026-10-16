@@ -30,7 +30,7 @@
 typedef struct bankModeConfig_s {
     uint16_t thrustToWeight;        // full-collective thrust / weight, x100 (200 = 2.0): 1 / collective^1.5 in a steady hover
     uint8_t maxBankAngle;           // bank angle at full yaw (bank) stick, degrees
-    uint8_t maxTiltAngle;           // forward tilt at full speed (throttle) stick, degrees
+    uint8_t maxBrakeAngle;          // steepest tilt back when braking, degrees (forward tilt is limited by the thrust)
     uint8_t stickDeadband;          // deadband around stick centre, percent of full deflection
     uint8_t headCheckRange;         // nose offset from the travel direction at full roll (head check) stick, degrees
     uint16_t headCheckRate;         // head-check slew and return rate, degrees per second
@@ -40,6 +40,7 @@ typedef struct bankModeConfig_s {
     uint16_t yawMaxRate;            // limit of the yaw rate command, degrees per second
     uint16_t speedKp;               // forward speed error gain, x100 (200 = 2.0): the braking strength at centre stick
     uint16_t speedDeadband;         // drag ignored around zero when estimating the forward speed, x1000 g
+    uint16_t midSpeed;              // speed asked for at the centre of the speed (throttle) stick, in g of drag, x100; the top of the stick is the top speed
 } bankModeConfig_t;
 
 PG_DECLARE(bankModeConfig_t, bankModeConfig);

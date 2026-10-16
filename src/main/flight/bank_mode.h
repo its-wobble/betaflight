@@ -82,7 +82,6 @@ typedef struct bankState_s {
     float dragThrust;           // thrust the drag is normalised by, g, filtered like the drag
     float thrustTrim;           // fast trim dividing the collective's thrust, >= 1, 1 = as the thrust-to-weight says, 0 until it starts
     float trimModelVertical;    // modelled vertical force of the collective sent at the commanded tilt, g, lagged like the motors
-    float tiltCos;              // cos(pitch) * cos(roll) of the previous update's commanded tilt
     bool started;               // the first update since the mode was engaged has been seen
     bool tiltLocked;            // engaged with the throttle low: no tilt until the bank stick is centred
     timeUs_t lastUpdateUs;

@@ -28,12 +28,12 @@
 
 #include "bank_mode.h"
 
-PG_REGISTER_WITH_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig, PG_BANK_MODE_CONFIG, 2);
+PG_REGISTER_WITH_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig, PG_BANK_MODE_CONFIG, 3);
 
 PG_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig,
                   .thrustToWeight = 570,          // the simulator's five inch, measured in a hover on a full pack
                   .maxBankAngle = 90,
-                  .maxTiltAngle = 30,
+                  .maxBrakeAngle = 30,
                   .stickDeadband = 5,
                   .headCheckRange = 90,
                   .headCheckRate = 360,
@@ -42,6 +42,8 @@ PG_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig,
                   .ballDeadband = 20,
                   .yawMaxRate = 360,
                   .speedKp = 200,
-                  .speedDeadband = 20, );
+                  .speedDeadband = 20,
+                  .midSpeed = 50,                 // about 22 m/s on the simulator's five inch (its 40 m/s top speed reads 1.07)
+                  );
 
 #endif // USE_BANK_MODE

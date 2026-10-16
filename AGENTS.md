@@ -4,7 +4,7 @@ Betaflight is C flight-controller firmware for many MCU families (STM32, AT32, A
 
 ## Project context
 
-The current work is a **new flight mode, "bank"** (spec and plan in [project_plan.md](/workspaces/betaflight/project_plan.md)). It is a personal project that may be upstreamed one day, so develop it the Betaflight way: small single-purpose changes, no target-specific code in `src/main`, compile-time feature gating, unit tests, and PRs against `master` (see Conventions).
+The current work is a **new flight mode, "bank"** (spec and plan in [project_plan.md](/workspaces/betaflight/project_plan.md)). Talk about it in the owner's terms, defined in that file's "Terms" section: the controls are **Speed**, **Lift** and **Bank** in the world frame, and **thrust** is the props' force in the drone frame. It is a personal project that may be upstreamed one day, so develop it the Betaflight way: small single-purpose changes, no target-specific code in `src/main`, compile-time feature gating, unit tests, and PRs against `master` (see Conventions).
 
 **Testing in the simulator**: the bank mode is flown end to end in the WebFPVSimulator (`/home/devpod/WebFPVSimulator`, cloned by `.devcontainer/setup-sim.sh`). After any bank mode change, follow the `bank-sim-loop` skill (`.claude/skills/bank-sim-loop/SKILL.md`): `make test_bank_unittest`, then `npm run bank:cycle` in the sim. How to run and fly it by hand: `BANK-MODE.md` in the sim repo.
 
