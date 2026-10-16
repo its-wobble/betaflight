@@ -1,6 +1,6 @@
 # Project plan: "bank" flight mode
 
-A new flight mode, **"bank"**. Development conventions (target independence, compile-time gating, tests, PR rules) are in [AGENTS.md](AGENTS.md).
+A new flight mode, **"bank"**. Development conventions (target independence, compile-time gating, tests, PR rules) are in [CLAUDE.md](CLAUDE.md).
 
 Goal: fly a drone like a car on a banked track. The three control axes are coupled down to two, with a spare stick axis for look-around.
 

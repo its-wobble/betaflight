@@ -63,10 +63,7 @@ eeprom.bin
 
 # Ignore AI Agent files for now in favour of
 # contributors being able to roll their own
-# FORK ONLY (its-wobble/betaflight): AGENTS.md and .claude/skills/ are tracked
-# here for the bank mode work. Restore the upstream lines (".claude" and
-# "AGENTS.md") and drop those files before opening a PR against betaflight.
 .claude/*
 !.claude/skills/
-CLAUDE.md
+AGENTS.md
 /tasks
