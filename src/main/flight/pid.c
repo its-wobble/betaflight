@@ -645,7 +645,15 @@ STATIC_UNIT_TESTED FAST_CODE_NOINLINE float pidLevel(int axis, const pidProfile_
     // minimise cross-axis wobble due to faster yaw responses than roll or pitch, and make co-ordinated yaw turns
     // by compensating for the effect of yaw on roll while pitched, and on pitch while rolled
     // earthRef code here takes about 76 cycles, if conditional on angleEarthRef it takes about 100.  sin_approx costs most of those cycles.
-    float sinAngle = sin_approx(DEGREES_TO_RADIANS(pidRuntime.angleTarget[axis == FD_ROLL ? FD_PITCH : FD_ROLL]));
+    float crossAngle = pidRuntime.angleTarget[axis == FD_ROLL ? FD_PITCH : FD_ROLL];
+#ifdef USE_BANK_MODE
+    if (FLIGHT_MODE(BANK_MODE)) {
+        // bank mode's yaw is the turn rate of the bank the craft is in, so it is shared out by the measured attitude:
+        // by the targets, flicking from one hard bank to the other pitched the nose up while the craft rolled through
+        crossAngle = attitude.raw[axis == FD_ROLL ? FD_PITCH : FD_ROLL] * 0.1f;
+    }
+#endif
+    float sinAngle = sin_approx(DEGREES_TO_RADIANS(crossAngle));
     sinAngle *= (axis == FD_ROLL) ? -1.0f : 1.0f; // must be negative for Roll
     const float earthRefGain = FLIGHT_MODE(GPS_RESCUE_MODE | ALT_HOLD_MODE | BANK_MODE) ? 1.0f : pidRuntime.angleEarthRef;
     angleRate += pidRuntime.angleYawSetpoint * sinAngle * earthRefGain;
@@ -1315,6 +1323,12 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
                 if (earthRefGain) {
                     pidRuntime.angleYawSetpoint = currentPidSetpoint;
                     float maxAngleTargetAbs = earthRefGain * fmaxf( fabsf(pidRuntime.angleTarget[FD_ROLL]), fabsf(pidRuntime.angleTarget[FD_PITCH]) );
+#ifdef USE_BANK_MODE
+                    if (FLIGHT_MODE(BANK_MODE)) {
+                        // shared out by the measured attitude, as in pidLevel()
+                        maxAngleTargetAbs = MAX(ABS(attitude.raw[FD_ROLL]), ABS(attitude.raw[FD_PITCH])) * 0.1f;
+                    }
+#endif
                     maxAngleTargetAbs *= (FLIGHT_MODE(HORIZON_MODE)) ? horizonLevelStrength : 1.0f;
                     // reduce compensation whenever Horizon uses less levelling
                     currentPidSetpoint *= cos_approx(DEGREES_TO_RADIANS(maxAngleTargetAbs));

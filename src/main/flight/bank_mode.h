@@ -56,8 +56,8 @@ typedef struct bankInputs_s {
     float accX;                 // specific force along body X (forward), g, unfiltered
     float accY;                 // specific force along body Y (left), g, unfiltered
     float accZ;                 // specific force along body Z (up), g, unfiltered
-    float dragX;                // filtered specific force along body X (forward), g
-    float dragY;                // filtered specific force along body Y (left), g
+    float dragX;                // filtered drag along the nose's heading, levelled (bankDragToLevelFrame()), g
+    float dragY;                // filtered drag to the left of the nose's heading, levelled, g
     float measuredPitchDeg;     // measured attitude, same signs as the targets: pitch positive nose-down
     float measuredRollDeg;      // measured attitude: roll positive to the right
     float dt;                   // seconds since the previous update
@@ -73,7 +73,7 @@ typedef struct bankOutputs_s {
 
 typedef struct bankState_s {
     float headCheckOffset;      // radians, positive = nose counter-clockwise from the travel direction
-    float dragX;
+    float dragX;                // levelled drag, filtered (bankModeUpdate())
     float dragY;
     float ballIntegrator;       // yaw rate held by the ball integrator, degrees per second
     float turnGain;             // learnt turn feedforward gain, deg/s * g, 0 until the mode first runs
@@ -81,6 +81,9 @@ typedef struct bankState_s {
     float collective;           // collective of the previous update, as applied by the mixer
     float dragThrust;           // thrust the drag is normalised by, g, filtered like the drag
     float thrustTrim;           // fast trim dividing the collective's thrust, >= 1, 1 = as the thrust-to-weight says, 0 until it starts
+    float forwardTilt;          // forward tilt target of the previous update, travel frame, radians
+    float trimInflow;           // air through the props from above when the trim was last updated, g of drag
+    float speed;                // speed estimate of the previous update, g of drag
     float trimModelVertical;    // modelled vertical force of the collective sent at the commanded tilt, g, lagged like the motors
     bool started;               // the first update since the mode was engaged has been seen
     bool tiltLocked;            // engaged with the throttle low: no tilt until the bank stick is centred
