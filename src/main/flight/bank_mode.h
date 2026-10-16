@@ -72,7 +72,7 @@ typedef struct bankOutputs_s {
 } bankOutputs_t;
 
 typedef struct bankState_s {
-    float headCheckOffset;      // radians, positive = nose counter-clockwise from the travel direction
+    float headCheckOffset;      // radians, positive = nose counter-clockwise from the travel direction: the look into the turn plus the head check
     float dragX;                // levelled drag, filtered (bankModeUpdate())
     float dragY;
     float ballIntegrator;       // yaw rate held by the ball integrator, degrees per second

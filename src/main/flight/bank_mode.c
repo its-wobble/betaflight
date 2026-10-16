@@ -65,7 +65,8 @@
  *                craft coasts down. The upper half is a forward force, from what the centre gives to all the thrust
  *                allows at the top, as at full throttle in acro, so both modes reach the same top speed. There is no
  *                reverse.
- *   yaw       -> bank angle phi, i.e. a turn in the horizontal plane. Centre = none.
+ *   yaw       -> bank angle phi, i.e. a turn in the horizontal plane. Centre = none. The nose looks into the turn
+ *                (see "Looking into the turn" below), so the bank is flown mostly as pitch towards the centre.
  *   pitch     -> vertical lift command (not raw throttle). The bottom of the stick gives no lift at all (free
  *                fall), the centre gives 1 g (thrust balances weight), and the top gives the maximum thrust,
  *                all of it as lift, whatever multiple of the weight that is.
@@ -119,6 +120,12 @@
  *   in the travel frame and rotated into the body frame by the offset, so the earth-frame thrust
  *   direction, and so the travel direction, is not changed by looking away. Tilt magnitude and
  *   collective are invariant under that rotation.
+ *
+ *   Looking into the turn: the mode adds its own offset to the head check, so the nose points where the thrust
+ *   pushes, as a pilot turns in acro: pitched into the turn, not rolled, like a car drifting. It is a head check, so
+ *   the track is the same as with the nose along it; only the view and the split of the tilt into body pitch and roll
+ *   change:
+ *     offset = -atan2(cos(theta) * sin(phi), max(sin(theta), 0)) * min(|phi| / 20 deg, 1) + yawStick * headCheckRange
  *
  *   Coordinated turn, the "ball": for a banked turn tan(phi) = v * omega / g, so omega = g * tan(phi) / v
  *   needs the speed. Instead of computing that, yaw is driven to keep the ball of a turn-and-slip
@@ -193,6 +200,7 @@
 #define BANK_FORWARD_TILT_RATE  180.0f  // deg/s: how fast the forward tilt may grow once the craft is not rolling
 #define BANK_REVERSE_MAX_TILT_DEG 15.0f // tilted further forward than this the craft is not reversing (bankCanReverse())
 #define BANK_MAX_HELD_BANK_DEG  85.0f   // the measured bank the turn rate is fed forward from is taken no steeper than this
+#define BANK_LOOK_FADE_DEG      20.0f   // the look into the turn fades in over this much bank (bankLookIntoTurnOffset())
 
 static bankState_t bankState;
 
@@ -368,6 +376,20 @@ STATIC_UNIT_TESTED float bankSlewHeadCheck(float offset, float target, float rat
 {
     const float maxStep = rate * dt;
     return offset + constrainf(target - offset, -maxStep, maxStep);
+}
+
+// The nose offset from the track that looks into the turn: the nose turns to where the thrust pushes, so the craft
+// pitches into the turn instead of rolling, as the owner turns in acro (in webfpv-bank-20261016-234544.csv the camera
+// looked a median 76 degrees into the turn and the thrust pointed 67 degrees in). theta and phi are the commanded tilt in
+// the travel frame. A bank with no forward tilt looks at the centre of the turn; the forward tilt Speed adds beside it
+// turns the look back towards the track (a full bank at centre Speed on the five inch, 73 degrees with 41 of forward
+// tilt beside it, looks 48 degrees in). Tilting back to brake counts as none, so a brake still looks along the track.
+// Over the first BANK_LOOK_FADE_DEG of bank the look fades in, so small corrections do not swing the nose. Returns
+// radians, positive counter-clockwise like the head check: a right bank looks to the right.
+STATIC_UNIT_TESTED float bankLookIntoTurnOffset(float theta, float phi)
+{
+    const float azimuth = atan2f(cosf(theta) * sinf(phi), fmaxf(sinf(theta), 0.0f));   // where the thrust pushes, from the track
+    return -azimuth * fminf(fabsf(phi) / DEGREES_TO_RADIANS(BANK_LOOK_FADE_DEG), 1.0f);
 }
 
 // Expresses a tilt (theta, phi) given in the travel frame in the body frame, when the nose is
@@ -703,10 +725,15 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
         trimmedThrustToWeight);
     state->collective = collective;
 
+    // The nose offset: the look into the turn, with the head check on top. Both only rotate the tilt into the body
+    // frame, so the thrust in the world frame, and with it the track, is the same whichever way the nose looks.
     const float previousOffset = state->headCheckOffset;
-    const float offsetTarget = yawStick * DEGREES_TO_RADIANS(config->headCheckRange);
-    state->headCheckOffset = bankSlewHeadCheck(previousOffset, offsetTarget, DEGREES_TO_RADIANS(config->headCheckRate), in->dt);
-    const bool headCheckSlewing = state->headCheckOffset != previousOffset;
+    const float offsetTarget = bankLookIntoTurnOffset(theta, phi) + yawStick * DEGREES_TO_RADIANS(config->headCheckRange);
+    const float offsetRate = DEGREES_TO_RADIANS(config->headCheckRate);
+    state->headCheckOffset = bankSlewHeadCheck(previousOffset, offsetTarget, offsetRate, in->dt);
+    // Slewing while the offset is held back by the rate: the look follows the tilt and moves a little on every update in
+    // a turn, and taken as a slew that would stop the ball integrator and the turn gain learner for the whole turn
+    const bool headCheckSlewing = fabsf(offsetTarget - previousOffset) > offsetRate * in->dt;
     const float offsetRateDps = in->dt > 0.0f ? RADIANS_TO_DEGREES((state->headCheckOffset - previousOffset) / in->dt) : 0.0f;
 
     bankRotateTilt(&theta, &phi, state->headCheckOffset);
