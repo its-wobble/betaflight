@@ -85,7 +85,7 @@ extern "C" {
     float bankLearnTurnGain(float turnGain, float bankTan, float speed, float dt, float *integrator);
     float bankStepBallController(float ball, float kp, float ki, float maxRate, float dt, float *integrator);
     void bankCompute(const bankModeConfig_t *config, const bankInputs_t *in, bankState_t *state, bankOutputs_t *out);
-    float bankLookIntoTurnOffset(float theta, float phi);
+    float bankLookIntoTurnOffset(float bankStick, float speedStick);
 }
 
 #include "gtest/gtest.h"
@@ -362,28 +362,22 @@ TEST(BankModeTest, QuarterTurnOffsetSwapsBankAndPitchAxes)
     EXPECT_NEAR(20.0f * DEG, fabsf(theta), 1e-4f);
 }
 
-TEST(BankModeTest, LookIntoTurnOffsetPointsTheNoseWhereTheThrustPushes)
+TEST(BankModeTest, LookIntoTurnOffsetComesFromBankAgainstSpeed)
 {
-    // straight: along the track, whatever the forward tilt
+    // no bank: along the track, whatever the speed
     EXPECT_FLOAT_EQ(0.0f, bankLookIntoTurnOffset(0.0f, 0.0f));
-    EXPECT_FLOAT_EQ(0.0f, bankLookIntoTurnOffset(30.0f * DEG, 0.0f));
-    // a pure bank: at the centre of the turn, clockwise for a right bank
-    EXPECT_NEAR(-90.0f * DEG, bankLookIntoTurnOffset(0.0f, 60.0f * DEG), 1e-5f);
-    EXPECT_NEAR(90.0f * DEG, bankLookIntoTurnOffset(0.0f, -60.0f * DEG), 1e-5f);
-    // with forward tilt, where the thrust pushes: 67 degrees in, as the owner's acro turns
-    const float offset = bankLookIntoTurnOffset(20.0f * DEG, 60.0f * DEG);
-    EXPECT_NEAR(-atan2f(cosf(20.0f * DEG) * sinf(60.0f * DEG), sinf(20.0f * DEG)), offset, 1e-5f);
-    EXPECT_NEAR(-67.2f * DEG, offset, 0.1f * DEG);
-    // and so the craft pitches into the turn with no body roll
-    float theta = 20.0f * DEG;
-    float phi = 60.0f * DEG;
-    bankRotateTilt(&theta, &phi, offset);
-    EXPECT_NEAR(0.0f, phi, 1e-4f);
-    EXPECT_NEAR(acosf(cosf(20.0f * DEG) * cosf(60.0f * DEG)), theta, 1e-4f);
-    // tilting back to brake counts as none
-    EXPECT_NEAR(-90.0f * DEG, bankLookIntoTurnOffset(-20.0f * DEG, 60.0f * DEG), 1e-5f);
-    // a small bank only turns the nose a little
-    EXPECT_NEAR(-22.5f * DEG, bankLookIntoTurnOffset(0.0f, 5.0f * DEG), 1e-4f);
+    EXPECT_FLOAT_EQ(0.0f, bankLookIntoTurnOffset(0.0f, 1.0f));
+    // a big bank at no speed: a quarter turn, clockwise for a right bank
+    EXPECT_NEAR(-90.0f * DEG, bankLookIntoTurnOffset(1.0f, 0.0f), 1e-5f);
+    EXPECT_NEAR(90.0f * DEG, bankLookIntoTurnOffset(-1.0f, 0.0f), 1e-5f);
+    // full bank at full speed: half way
+    EXPECT_NEAR(-45.0f * DEG, bankLookIntoTurnOffset(1.0f, 1.0f), 1e-5f);
+    // a little bank at full speed: a little
+    EXPECT_NEAR(-atan2f(0.2f, 1.0f), bankLookIntoTurnOffset(0.2f, 1.0f), 1e-5f);
+    // more bank against the same speed looks further in
+    EXPECT_LT(bankLookIntoTurnOffset(0.8f, 0.5f), bankLookIntoTurnOffset(0.4f, 0.5f));
+    // a small bank at no speed fades in instead of swinging the nose round
+    EXPECT_NEAR(-45.0f * DEG, bankLookIntoTurnOffset(0.1f, 0.0f), 1e-5f);
 }
 
 TEST(BankModeTest, BallIsCentredWithNoSlip)
@@ -668,7 +662,6 @@ TEST(BankModeTest, ComputeSignsFollowTheSticks)
     phi = out.rollDeg * DEG;
     bankRotateTilt(&theta, &phi, -state.headCheckOffset);
     EXPECT_GT(theta, 0.0f);         // forward
-    EXPECT_GT(out.pitchDeg, 0.0f);  // nose-down, towards where the thrust pushes
     // once the craft has tilted, the tilt adds collective so the vertical force is unchanged
     in.measuredRollDeg = out.rollDeg;
     in.measuredPitchDeg = out.pitchDeg;
@@ -954,7 +947,7 @@ TEST(BankModeTest, ComputeTurnRateFollowsTheBankTheCraftIsInNotTheStick)
 {
     // the bank stick flicked from a hard right bank to a hard left one: the craft is still banked right and still
     // turning right, so the turn fed forward keeps turning the nose right until the craft has rolled through (the look
-    // into the turn swings it left on top, ComputeLookingIntoTheTurnSwingsTheNoseOnAReversal), and the ball is not integrated
+    // into the turn swings it left on top, ComputeLookSwingsWithTheBankStickOnAReversal), and the ball is not integrated
     pgResetAll();
     bankState_t state = {};
     bankOutputs_t out = {};
@@ -1013,25 +1006,36 @@ TEST(BankModeTest, ComputeYawRateIsLimited)
     EXPECT_GE(out.yawRateDps, -(float)bankModeConfig()->yawMaxRate);
 }
 
-TEST(BankModeTest, ComputeLookingIntoAHardBankPitchesTowardsTheCentre)
+// The look the sticks of in ask for, as bankCompute() shapes them
+static float stickLook(const bankModeConfig_t *config, const bankInputs_t *in)
+{
+    const float deadband = config->stickDeadband / 100.0f;
+    return bankLookIntoTurnOffset(bankShapeStick(in->roll, deadband), bankShapeStick(in->speed, deadband));
+}
+
+TEST(BankModeTest, ComputeLookIntoTheTurnFollowsTheSticks)
 {
     pgResetAll();
     bankState_t state = {};
     bankOutputs_t out = {};
     bankInputs_t in = steadyBankInputs();
+    // the bank is still asked for in the travel frame, as a car on a banked track; the nose slews into the turn
+    flySteadyBank(bankModeConfig(), &in, &state, &out, 0.0f, 1);
+    EXPECT_NEAR(-bankModeConfig()->headCheckRate * DEG * in.dt, state.headCheckOffset, 1e-5f);
     flySteadyBank(bankModeConfig(), &in, &state, &out, 0.0f, 300);
-    // the nose looks where the thrust pushes, into the right turn: at centre Speed the five inch keeps about 40 degrees of
-    // forward tilt beside the bank, so it looks about half way in
+    EXPECT_NEAR(stickLook(bankModeConfig(), &in), state.headCheckOffset, 1e-4f);
+    EXPECT_LT(state.headCheckOffset, -45.0f * DEG);    // full bank against half speed: more than half way in
+    // and the track is unchanged: seen from the track, the tilt is the bank asked for
     float theta = out.pitchDeg * DEG;
     float phi = out.rollDeg * DEG;
-    bankRotateTilt(&theta, &phi, -state.headCheckOffset);      // back into the travel frame
-    EXPECT_GT(phi, 60.0f * DEG);
-    EXPECT_NEAR(bankLookIntoTurnOffset(theta, phi), state.headCheckOffset, 0.5f * DEG);
-    EXPECT_LT(state.headCheckOffset, -40.0f * DEG);
-    // and the bank is flown as pitch towards the centre
-    EXPECT_NEAR(0.0f, out.rollDeg, 1.0f);
-    EXPECT_GT(out.pitchDeg, 45.0f);
-
+    bankRotateTilt(&theta, &phi, -state.headCheckOffset);
+    EXPECT_GT(phi, 45.0f * DEG);
+    // more speed, less look
+    const float offsetHalfSpeed = state.headCheckOffset;
+    in.speed = 1.0f;
+    flySteadyBank(bankModeConfig(), &in, &state, &out, 0.0f, 300);
+    EXPECT_GT(state.headCheckOffset, offsetHalfSpeed);
+    EXPECT_NEAR(-45.0f * DEG, state.headCheckOffset, 1e-4f);
 }
 
 TEST(BankModeTest, ComputeHeadCheckAddsToTheLookIntoTheTurn)
@@ -1042,11 +1046,7 @@ TEST(BankModeTest, ComputeHeadCheckAddsToTheLookIntoTheTurn)
     bankInputs_t in = steadyBankInputs();
     in.yaw = 1.0f;                      // head check to the left, out of the right turn
     flySteadyBank(bankModeConfig(), &in, &state, &out, 0.0f, 300);
-    float theta = out.pitchDeg * DEG;
-    float phi = out.rollDeg * DEG;
-    bankRotateTilt(&theta, &phi, -state.headCheckOffset);      // back into the travel frame
-    EXPECT_GT(phi, 45.0f * DEG);
-    EXPECT_NEAR(bankLookIntoTurnOffset(theta, phi) + bankModeConfig()->headCheckRange * DEG, state.headCheckOffset, 0.5f * DEG);
+    EXPECT_NEAR(stickLook(bankModeConfig(), &in) + bankModeConfig()->headCheckRange * DEG, state.headCheckOffset, 1e-4f);
 }
 
 TEST(BankModeTest, ComputeBallIsIntegratedInASteadyTurnWhileTheLookFollowsTheTilt)
@@ -1070,10 +1070,10 @@ TEST(BankModeTest, ComputeBallIsIntegratedInASteadyTurnWhileTheLookFollowsTheTil
     EXPECT_GT(state.ballIntegrator, 0.0f);
 }
 
-TEST(BankModeTest, ComputeLookingIntoTheTurnSwingsTheNoseOnAReversal)
+TEST(BankModeTest, ComputeLookSwingsWithTheBankStickOnAReversal)
 {
-    // the bank stick flicked from a hard right bank to a hard left one: the look turns to the new centre at once, at the
-    // head check rate, while the craft still turns right
+    // the bank stick flicked from a hard right bank to a hard left one: the look turns to the new side at once, at the
+    // head check rate
     pgResetAll();
     bankState_t state = {};
     bankOutputs_t out = {};
@@ -1083,7 +1083,9 @@ TEST(BankModeTest, ComputeLookingIntoTheTurnSwingsTheNoseOnAReversal)
     in.roll = -1.0f;
     flySteadyBank(bankModeConfig(), &in, &state, &out, 0.0f, 1);
     EXPECT_NEAR(offsetBefore + bankModeConfig()->headCheckRate * DEG * in.dt, state.headCheckOffset, 1e-4f);
-    EXPECT_GT(out.yawRateDps, 0.0f);    // counter-clockwise, to the left
+    flySteadyBank(bankModeConfig(), &in, &state, &out, 0.0f, 300);
+    EXPECT_NEAR(stickLook(bankModeConfig(), &in), state.headCheckOffset, 1e-4f);
+    EXPECT_GT(state.headCheckOffset, 45.0f * DEG);
 }
 
 TEST(BankModeTest, DragToTravelFrameRotatesByTheOffset)
@@ -1147,9 +1149,9 @@ TEST(BankModeTest, ComputeBallIsCentredInAPitchedBankedTurnWithNoSlip)
     bankOutputs_t out = {};
     bankInputs_t in = centredInputs();
     in.roll = 26.0f / config.maxBankAngle;
-    // the speed stick at the bottom brakes, so the nose already looks at the centre of the turn: a quarter turn
-    // clockwise of the track, where the craft is tilted 10 degrees forward and banked 26 seen from the track
-    state.headCheckOffset = -90.0f * DEG;
+    // the nose already looks into the turn as far as the sticks ask for: the craft is tilted 10 degrees forward and
+    // banked 26 seen from the track
+    state.headCheckOffset = bankLookIntoTurnOffset(in.roll, in.speed);
     float bodyPitch = 10.0f * DEG;
     float bodyRoll = 26.0f * DEG;
     bankRotateTilt(&bodyPitch, &bodyRoll, state.headCheckOffset);
@@ -1160,8 +1162,9 @@ TEST(BankModeTest, ComputeBallIsCentredInAPitchedBankedTurnWithNoSlip)
     float bodyDragY;
     inPlaneDrag(-0.3f * cosf(state.headCheckOffset), 0.3f * sinf(state.headCheckOffset), bodyPitch, bodyRoll, &bodyDragX, &bodyDragY);
     bankDragToLevelFrame(bodyDragX, bodyDragY, bodyPitch, bodyRoll, &in.dragX, &in.dragY);   // as bankModeUpdate() does
+    const float offsetBefore = state.headCheckOffset;
     bankCompute(&config, &in, &state, &out);
-    EXPECT_NEAR(-90.0f * DEG, state.headCheckOffset, 1e-5f);
+    EXPECT_NEAR(offsetBefore, state.headCheckOffset, 1e-5f);   // the look holds
     // the ball adds nothing: the yaw rate is only the feedforward for the bank the craft is in
     EXPECT_NEAR(0.0f, state.ballIntegrator, 1e-3f);
     float heldPitch = bodyPitch;
