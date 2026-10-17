@@ -1703,7 +1703,7 @@ TEST(BankModeTest, UpdateMirrorsTheModeFlagAndClearsWhenInactive)
     EXPECT_TRUE(bankModeIsActive());
     EXPECT_NEAR(hoverCollective(defaultThrustToWeight()), bankModeGetCollective(), 1e-5f);
 
-    testDeflection[FD_YAW] = -1.0f;     // yaw stick right = bank right
+    testDeflection[FD_ROLL] = 1.0f;     // roll stick right = bank right
     bankModeUpdate(12000);
     EXPECT_GT(bankModeGetAngleTarget(FD_ROLL), 0.0f);
 

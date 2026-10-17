@@ -29,10 +29,10 @@
 
 typedef struct bankModeConfig_s {
     uint16_t thrustToWeight;        // full-collective thrust / weight, x100 (200 = 2.0): 1 / collective^1.5 in a steady hover
-    uint8_t maxBankAngle;           // bank angle at full yaw (bank) stick, degrees
+    uint8_t maxBankAngle;           // bank angle at full roll (bank) stick, degrees
     uint8_t maxBrakeAngle;          // steepest tilt back when braking, degrees (forward tilt is limited by the thrust)
     uint8_t stickDeadband;          // deadband around stick centre, percent of full deflection
-    uint8_t headCheckRange;         // nose offset from the travel direction at full roll (head check) stick, degrees
+    uint8_t headCheckRange;         // nose offset from the travel direction at full yaw (head check) stick, degrees
     uint16_t headCheckRate;         // head-check slew and return rate, degrees per second
     uint16_t ballKp;                // yaw rate per g of lateral specific force (the ball), degrees per second per g
     uint16_t ballKi;                // ball integral gain, degrees per second squared per g

@@ -43,7 +43,7 @@
 #ifdef USE_BANK_MODE
 
 // Roll (bank) and yaw (head check) inputs are -1..1: roll to the right, yaw counter-clockwise.
-// The bank input comes from the yaw stick and the head check from the roll stick.
+// The bank input comes from the roll stick and the head check from the yaw stick.
 // The speed input is the throttle stick position, 0 at the bottom (stop) to 1 at the top (no reverse).
 // The lift input is the pitch stick position, 0 at the bottom (no lift), 0.5 at the centre (1 g) to 1 at the top.
 typedef struct bankInputs_s {

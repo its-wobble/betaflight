@@ -65,15 +65,15 @@
  *                craft coasts down. The upper half is a forward force, from what the centre gives to all the thrust
  *                allows at the top, as at full throttle in acro, so both modes reach the same top speed. There is no
  *                reverse.
- *   yaw       -> bank angle phi, i.e. a turn in the horizontal plane. Centre = none. The nose looks into the turn,
- *                further the more Bank against Speed (see "Looking into the turn" below).
+ *   yaw       -> head check: nose offset from the travel direction, springs back to 0 at centre.
  *   pitch     -> vertical lift command (not raw throttle). The bottom of the stick gives no lift at all (free
  *                fall), the centre gives 1 g (thrust balances weight), and the top gives the maximum thrust,
  *                all of it as lift, whatever multiple of the weight that is.
- *   roll      -> head check: nose offset from the travel direction, springs back to 0 at centre.
+ *   roll      -> bank angle phi, i.e. a turn in the horizontal plane. Centre = none. The nose looks into the turn,
+ *                further the more Bank against Speed (see "Looking into the turn" below).
  *
  * Arming is with the left stick at the bottom (zero speed) and the right stick wherever the lift should start.
- * If the mode is engaged with the throttle low and the bank (yaw) stick off-centre, the tilt stays at zero
+ * If the mode is engaged with the throttle low and the bank (roll) stick off-centre, the tilt stays at zero
  * until the bank stick has been centred once.
  *
  * Each update, while BANK_MODE is active:
@@ -827,11 +827,10 @@ void bankModeUpdate(timeUs_t currentTimeUs)
     }
 
     const bankInputs_t inputs = {
-        // The L/R sticks are swapped: yaw stick = bank, roll stick = head check. Both are positive for
-        // the stick to the right, and the yaw deflection is positive to the left, hence the signs.
-        .roll = -getRcDeflection(FD_YAW),
+        // Roll stick = bank, yaw stick = head check, each on its own channel and sign
+        .roll = getRcDeflection(FD_ROLL),
         .speed = (rcCommand[THROTTLE] - PWM_RANGE_MIN) / (float)PWM_RANGE,   // 0 at the bottom, 1 at the top
-        .yaw = -getRcDeflection(FD_ROLL),
+        .yaw = getRcDeflection(FD_YAW),
         .lift = 0.5f * (getRcDeflection(FD_PITCH) + 1.0f),
         .throttleLow = calculateThrottleStatus() == THROTTLE_LOW,
         .armed = ARMING_FLAG(ARMED),
