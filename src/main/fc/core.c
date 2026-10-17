@@ -803,8 +803,7 @@ uint8_t calculateThrottlePercentAbs(void)
     return abs(calculateThrottlePercent());
 }
 
-// The throttle status for whether the motors are running. Under BANK the throttle stick is the Speed, and at its bottom
-// the craft hovers: taken as a low throttle, it reset the I-term, auto-disarmed and failed the runaway takeoff check.
+// Under BANK the throttle stick is the Speed stick, whose bottom is a hover, not idle
 static throttleStatus_e calculateMotorThrottleStatus(void)
 {
 #ifdef USE_BANK_MODE
@@ -1048,9 +1047,8 @@ void processRxModes(timeUs_t currentTimeUs)
 
     bool canUseHorizonMode = true;
 
-    // BANK is a self-levelling mode built on ANGLE, like ALT_HOLD and POS_HOLD, and can be switched in flight.
-    // Failsafe, GPS rescue, altitude hold and position hold take priority over it. Those flags are from the
-    // previous cycle. OPEN: how BANK should interact with HEADFREE and arming.
+    // BANK levels like ANGLE. Failsafe, GPS rescue, alt hold and pos hold take priority (flags from the previous cycle).
+    // OPEN: interaction with HEADFREE and arming.
 #ifdef USE_BANK_MODE
     const bool bankModeRequested = IS_RC_MODE_ACTIVE(BOXBANK)
         && sensors(SENSOR_ACC)

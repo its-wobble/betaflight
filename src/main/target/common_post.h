@@ -870,7 +870,7 @@ extern struct linker_symbol __fontdata_end;
 #endif
 #endif
 
-// Bank mode is attitude-only (gyro/ACC), so it needs no GPS or baro.
+// attitude only, needs no GPS or baro
 #if defined(USE_ACC) && !defined(USE_BANK_MODE) && (TARGET_FLASH_SIZE > 512)
 #define USE_BANK_MODE
 #endif

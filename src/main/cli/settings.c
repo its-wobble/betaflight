@@ -1241,17 +1241,7 @@ const clivalue_t valueTable[] = {
 #ifdef USE_BANK_MODE
 // PG_BANK_MODE_CONFIG
     { "bank_thrust_to_weight",      VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 110, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, thrustToWeight) },
-    { "bank_max_bank_angle",        VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 5, 90 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, maxBankAngle) },
-    { "bank_max_brake_angle",       VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 5, 60 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, maxBrakeAngle) },
-    { "bank_stick_deadband",        VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 0, 25 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, stickDeadband) },
     { "bank_head_check_range",      VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 0, 180 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, headCheckRange) },
-    { "bank_head_check_rate",       VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 30, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, headCheckRate) },
-    { "bank_ball_kp",               VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 2000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, ballKp) },
-    { "bank_ball_ki",               VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 2000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, ballKi) },
-    { "bank_ball_deadband",         VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 500 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, ballDeadband) },
-    { "bank_yaw_max_rate",          VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 30, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, yawMaxRate) },
-    { "bank_speed_kp",              VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, speedKp) },
-    { "bank_speed_deadband",        VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 500 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, speedDeadband) },
     { "bank_look_turn",             VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 0, 100 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, lookTurn) },
     { "bank_mid_speed",             VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 5, 500 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, midSpeed) },
 #endif // USE_BANK_MODE

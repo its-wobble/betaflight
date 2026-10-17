@@ -648,8 +648,7 @@ STATIC_UNIT_TESTED FAST_CODE_NOINLINE float pidLevel(int axis, const pidProfile_
     float crossAngle = pidRuntime.angleTarget[axis == FD_ROLL ? FD_PITCH : FD_ROLL];
 #ifdef USE_BANK_MODE
     if (FLIGHT_MODE(BANK_MODE)) {
-        // bank mode's yaw is the turn rate of the bank the craft is in, so it is shared out by the measured attitude:
-        // by the targets, flicking from one hard bank to the other pitched the nose up while the craft rolled through
+        // bank mode's yaw follows the measured bank, so share it out by the measured attitude, not the targets
         crossAngle = attitude.raw[axis == FD_ROLL ? FD_PITCH : FD_ROLL] * 0.1f;
     }
 #endif

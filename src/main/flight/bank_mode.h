@@ -26,67 +26,42 @@
 
 #include "common/time.h"
 
-/*
- * BANK mode: fly a multirotor like a car on a banked track. See flight/bank_mode.c for the behaviour.
- *
- * Where it plugs in:
- *   fc/core.c             sets BANK_MODE (an alternative to ANGLE/HORIZON) and calls bankModeUpdate()
- *   flight/pid.c          takes the roll/pitch angle targets from bankModeGetAngleTarget()
- *   fc/rc.c               takes the yaw setpoint from bankModeGetYawRate()
- *   flight/mixer.c        takes the throttle from bankModeGetCollective()
- *   osd/osd_elements.c, telemetry/{ltm,smartport,ibus_shared}.c   mode reporting
- *
- * Not done yet: LED strip mode colour, OSD warning, blackbox fields, and the Betaflight Configurator
- * modes tab entry (MSP permanentId 59).
- */
+// BANK mode: fly a multirotor like a car on a banked track. See flight/bank_mode.c.
+// OPEN: LED strip colour, OSD warning, blackbox fields and the Configurator modes tab entry (MSP permanentId 59).
 
 #ifdef USE_BANK_MODE
 
-// Roll (bank) and yaw (head check) inputs are -1..1: roll to the right, yaw counter-clockwise.
-// The bank input comes from the roll stick and the head check from the yaw stick.
-// The speed input is the throttle stick position, 0 at the bottom (stop) to 1 at the top (no reverse).
-// The lift input is the pitch stick position, 0 at the bottom (no lift), 0.5 at the centre (1 g) to 1 at the top.
 typedef struct bankInputs_s {
-    float roll;
-    float speed;
-    float yaw;
-    float lift;
-    bool throttleLow;
-    bool armed;                 // the thrust trim is only measured while the motors are running
-    float accX;                 // specific force along body X (forward), g, unfiltered
-    float accY;                 // specific force along body Y (left), g, unfiltered
-    float accZ;                 // specific force along body Z (up), g, unfiltered
-    float dragX;                // filtered drag along the nose's heading, levelled (bankDragToLevelFrame()), g
-    float dragY;                // filtered drag to the left of the nose's heading, levelled, g
-    float measuredPitchDeg;     // measured attitude, same signs as the targets: pitch positive nose-down
-    float measuredRollDeg;      // measured attitude: roll positive to the right
-    float dt;                   // seconds since the previous update
-    bool motorsSaturated;       // the mixer could not give the last collective: the thrust measured is not its
+    float roll;                 // Bank stick, -1..1, positive right
+    float speed;                // Speed stick, 0..1
+    float yaw;                  // head check stick, -1..1, positive counter-clockwise
+    float lift;                 // Lift stick, 0..1, 0.5 = 1 g
+    bool armed;
+    float accX;                 // specific force, body frame (X forward, Y left, Z up), g
+    float accY;
+    float accZ;
+    float measuredPitchDeg;     // positive nose-down
+    float measuredRollDeg;      // positive right
+    float dt;                   // s, 0 or longer than BANK_MAX_DT_S restarts the filters
+    bool motorsSaturated;       // the mixer could not give the last collective
 } bankInputs_t;
 
 typedef struct bankOutputs_s {
-    float rollDeg;              // roll angle target, positive to the right
-    float pitchDeg;             // pitch angle target, positive nose-down (forward)
-    float yawRateDps;           // yaw rate setpoint, positive counter-clockwise
-    float collective;           // fraction of maximum thrust, 0..1
+    float rollDeg;              // positive right
+    float pitchDeg;             // positive nose-down
+    float yawRateDps;           // positive counter-clockwise
+    float collective;           // 0..1
 } bankOutputs_t;
 
 typedef struct bankState_s {
-    float headCheckOffset;      // radians, positive = nose counter-clockwise from the travel direction: the look into the turn plus the head check
-    float dragX;                // levelled drag, filtered (bankModeUpdate())
-    float dragY;
-    float ballIntegrator;       // yaw rate held by the ball integrator, degrees per second
-    float turnGain;             // learnt turn feedforward gain, deg/s * g, 0 until the mode first runs
-    float ballBankTan;          // tan of the bank the integrator was built for, travel frame, positive to the right
-    float collective;           // collective of the previous update, as applied by the mixer
-    float dragThrust;           // thrust the drag is normalised by, g, filtered like the drag
-    float thrustTrim;           // fast trim dividing the collective's thrust, >= 1, 1 = as the thrust-to-weight says, 0 until it starts
-    float forwardTilt;          // forward tilt target of the previous update, travel frame, radians
-    float trimInflow;           // air through the props from above when the trim was last updated, g of drag
-    float speed;                // speed estimate of the previous update, g of drag
-    float trimModelVertical;    // modelled vertical force of the collective sent at the commanded tilt, g, lagged like the motors
-    bool started;               // the first update since the mode was engaged has been seen
-    bool tiltLocked;            // engaged with the throttle low: no tilt until the bank stick is centred
+    float noseOffset;           // nose from the direction of travel, rad, positive counter-clockwise
+    float dragX;                // levelled drag at 1 g of thrust, filtered, g, along the nose's heading
+    float dragY;                // and to its left
+    float collective;           // previous update's collective
+    float thrustTrim;           // factor on the modelled thrust, 1 = as bank_thrust_to_weight says
+    float trimModelVertical;    // modelled vertical force, lagged like the motors, g
+    float trimInflow;           // inflow through the props the trim was measured at, g of drag
+    bool tiltLocked;            // engaged with the throttle low, no tilt until the sticks are centred
     timeUs_t lastUpdateUs;
 } bankState_t;
 
@@ -94,8 +69,8 @@ void bankModeUpdate(timeUs_t currentTimeUs);
 bool bankModeIsActive(void);
 float bankModeGetAngleTarget(int axis);     // FD_ROLL or FD_PITCH, degrees
 float bankModeGetYawRate(void);             // degrees per second
-float bankModeGetCollective(void);          // 0..1 of maximum thrust
-float bankModeGetThrustToWeight(void);      // thrust-to-weight ratio in use, learnt or configured
-bool bankModeIsThrottleLow(void);           // no thrust asked for: what a low throttle stick means outside BANK
+float bankModeGetCollective(void);          // 0..1
+float bankModeGetThrustToWeight(void);
+bool bankModeIsThrottleLow(void);           // replaces calculateThrottleStatus() == THROTTLE_LOW under BANK
 
 #endif // USE_BANK_MODE

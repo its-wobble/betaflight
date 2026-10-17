@@ -327,8 +327,7 @@ FAST_CODE_NOINLINE void failsafeUpdateState(void)
 #else
                     const bool autopilotControlsThrottle = false;
 #endif
-                    // Track throttle command below minimum time. Under BANK the throttle stick is the Speed, and its bottom
-                    // is a hover, not landed
+                    // Track throttle command below minimum time. Under BANK the bottom of the throttle stick is a hover
                     bool throttleLow = calculateThrottleStatus() == THROTTLE_LOW;
 #ifdef USE_BANK_MODE
                     if (FLIGHT_MODE(BANK_MODE)) {

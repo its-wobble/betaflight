@@ -672,9 +672,7 @@ FAST_CODE void processRcCommand(void)
 
 #ifdef USE_BANK_MODE
             if (FLIGHT_MODE(BANK_MODE)) {
-                // Bank mode owns all three axes. Its sticks are speed, bank, lift and head check, which it reads from
-                // the deflection, so none of them is also a rate here: roll and pitch are levelled to its own angle
-                // targets (no stick setpoint for feedforward or crash detection to see), and the yaw follows the travel.
+                // bank mode sets roll and pitch as angle targets in pidLevel(), and the yaw rate itself
                 angleRate = (axis == FD_YAW) ? bankModeGetYawRate() : 0.0f;
             }
 #endif
@@ -686,7 +684,7 @@ FAST_CODE void processRcCommand(void)
             calculateFeedforward(&pidRuntime, axis);
 #ifdef USE_BANK_MODE
             if (FLIGHT_MODE(BANK_MODE)) {
-                feedforwardRaw[axis] = 0.0f;    // the bank yaw rate is computed, not a stick to anticipate
+                feedforwardRaw[axis] = 0.0f;    // the setpoints are computed, not stick inputs
             }
 #endif
 #endif // USE_FEEDFORWARD
