@@ -96,5 +96,6 @@ float bankModeGetAngleTarget(int axis);     // FD_ROLL or FD_PITCH, degrees
 float bankModeGetYawRate(void);             // degrees per second
 float bankModeGetCollective(void);          // 0..1 of maximum thrust
 float bankModeGetThrustToWeight(void);      // thrust-to-weight ratio in use, learnt or configured
+bool bankModeIsThrottleLow(void);           // no thrust asked for: what a low throttle stick means outside BANK
 
 #endif // USE_BANK_MODE

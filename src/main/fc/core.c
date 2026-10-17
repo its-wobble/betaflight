@@ -803,6 +803,18 @@ uint8_t calculateThrottlePercentAbs(void)
     return abs(calculateThrottlePercent());
 }
 
+// The throttle status for whether the motors are running. Under BANK the throttle stick is the Speed, and at its bottom
+// the craft hovers: taken as a low throttle, it reset the I-term, auto-disarmed and failed the runaway takeoff check.
+static throttleStatus_e calculateMotorThrottleStatus(void)
+{
+#ifdef USE_BANK_MODE
+    if (FLIGHT_MODE(BANK_MODE)) {
+        return bankModeIsThrottleLow() ? THROTTLE_LOW : THROTTLE_HIGH;
+    }
+#endif
+    return calculateThrottleStatus();
+}
+
 static bool throttleRaised = false;
 bool wasThrottleRaised(void)
 {
@@ -832,7 +844,7 @@ bool processRx(timeUs_t currentTimeUs)
         failsafeStartMonitoring();
     }
 
-    const bool throttleActive = calculateThrottleStatus() != THROTTLE_LOW;
+    const bool throttleActive = calculateMotorThrottleStatus() != THROTTLE_LOW;
     const uint8_t throttlePercent = calculateThrottlePercentAbs();
     const bool launchControlActive = isLaunchControlActive();
     static bool isAirmodeActive;
@@ -961,7 +973,7 @@ void processRxModes(timeUs_t currentTimeUs)
 #ifdef USE_TELEMETRY
     static bool sharedPortTelemetryEnabled = false;
 #endif
-    const throttleStatus_e throttleStatus = calculateThrottleStatus();
+    const throttleStatus_e throttleStatus = calculateMotorThrottleStatus();
 
     // When armed and motors aren't spinning, do beeps and then disarm
     // board after delay so users without buzzer won't lose fingers.
@@ -1379,7 +1391,7 @@ static FAST_CODE_NOINLINE_CRITICAL void subTaskPidController(timeUs_t currentTim
         && !runawayTakeoffTemporarilyDisabled
         && !FLIGHT_MODE(GPS_RESCUE_MODE)   // disable Runaway Takeoff triggering if GPS Rescue is active
         // check that motors are running
-        && (!featureIsEnabled(FEATURE_MOTOR_STOP) || isAirmodeEnabled() || (calculateThrottleStatus() != THROTTLE_LOW))) {
+        && (!featureIsEnabled(FEATURE_MOTOR_STOP) || isAirmodeEnabled() || (calculateMotorThrottleStatus() != THROTTLE_LOW))) {
 
         if (((fabsf(pidData[FD_PITCH].Sum) >= RUNAWAY_TAKEOFF_PIDSUM_THRESHOLD)
             || (fabsf(pidData[FD_ROLL].Sum) >= RUNAWAY_TAKEOFF_PIDSUM_THRESHOLD)

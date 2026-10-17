@@ -40,6 +40,7 @@
 #include "fc/rc_modes.h"
 #include "fc/runtime_config.h"
 
+#include "flight/bank_mode.h"
 #include "flight/failsafe.h"
 #include "flight/flight_plan_nav.h"
 #include "flight/gps_rescue.h"
@@ -326,8 +327,15 @@ FAST_CODE_NOINLINE void failsafeUpdateState(void)
 #else
                     const bool autopilotControlsThrottle = false;
 #endif
-                    // Track throttle command below minimum time
-                    if (calculateThrottleStatus() != THROTTLE_LOW) {
+                    // Track throttle command below minimum time. Under BANK the throttle stick is the Speed, and its bottom
+                    // is a hover, not landed
+                    bool throttleLow = calculateThrottleStatus() == THROTTLE_LOW;
+#ifdef USE_BANK_MODE
+                    if (FLIGHT_MODE(BANK_MODE)) {
+                        throttleLow = bankModeIsThrottleLow();
+                    }
+#endif
+                    if (!throttleLow) {
                         failsafeState.throttleLowPeriod = millis() + failsafeConfig()->failsafe_throttle_low_delay * MILLIS_PER_TENTH_SECOND;
                     }
                     if (failsafeState.boxFailsafeSwitchWasOn && (failsafeConfig()->failsafe_switch_mode == FAILSAFE_SWITCH_MODE_KILL)) {
