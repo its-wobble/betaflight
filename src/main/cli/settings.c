@@ -1252,6 +1252,7 @@ const clivalue_t valueTable[] = {
     { "bank_yaw_max_rate",          VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 30, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, yawMaxRate) },
     { "bank_speed_kp",              VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, speedKp) },
     { "bank_speed_deadband",        VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 0, 500 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, speedDeadband) },
+    { "bank_look_turn",             VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 0, 100 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, lookTurn) },
     { "bank_mid_speed",             VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 5, 500 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, midSpeed) },
 #endif // USE_BANK_MODE
 

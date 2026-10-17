@@ -41,6 +41,7 @@ typedef struct bankModeConfig_s {
     uint16_t speedKp;               // forward speed error gain, x100 (200 = 2.0): the braking strength at centre stick
     uint16_t speedDeadband;         // drag ignored around zero when estimating the forward speed, x1000 g
     uint16_t midSpeed;              // speed asked for at the centre of the speed (throttle) stick, in g of drag, x100; the top of the stick is the top speed
+    uint8_t lookTurn;               // how far the nose looks into the turn, percent: 0 = look dot (along the direction of travel), 100 = look turn
 } bankModeConfig_t;
 
 PG_DECLARE(bankModeConfig_t, bankModeConfig);

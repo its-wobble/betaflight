@@ -79,7 +79,8 @@
  * Each update, while BANK_MODE is active:
  *
  *   phi   = rollStick * maxBankAngle
- *   theta = atan(Fx / (1 + Fz))            // Fx from the speed stick, see below; braking no steeper than bank_max_brake_angle
+ *   theta = atan(Fx * cos(phi) / (1 + Fz)) // Fx from the speed stick, see below; braking no steeper than bank_max_brake_angle;
+ *                                           // the bank tilts about the forward-tilted axis, so beside it Fx needs less tilt
  *   Fz    = lift(pitchStick) - 1           // lift: 0 at the bottom, 1 at the centre, Tmax at the top; above the centre
  *                                           // 1 + x + (Tmax - 2) * x^3, so both halves start at 1 g per half stick
  *
@@ -89,9 +90,12 @@
  *     Ttilt = (1 + Fz) + 0.75 * (Tmax - (1 + Fz))      // a quarter of the spare thrust is kept in reserve
  *     cosTiltMin = (1 + Fz) / Ttilt                     // T <= Ttilt  <=>  cos(theta) * cos(phi) >= cosTiltMin
  *     phi   = min(phi, acos(cosTiltMin))                // bank takes what it needs first
- *     phi   = min(phi, max(30 deg, atan(0.8 * yawMaxRate * v / turnGain)))   // and no steeper than the yaw can follow
- *     theta = min(theta, acos(cosTiltMin / cos(max(phi, measured bank))))   // forward tilt gets what remains, beside
- *                                                       // the bank asked for and the one the craft is still in
+ *     phi   = min(phi, max(30 deg, atan(0.8 * yawMaxRate * v / turnGain)))   // and no steeper than the yaw can follow;
+ *                                                       // held back by that, Fx is no more than a speed loop towards
+ *                                                       // the speed at which the bank asked for can be flown
+ *     theta = min(theta, acos(cosTiltMin / cos(max(phi, held))))   // forward tilt gets what remains, beside the bank
+ *                                                       // asked for and the one the craft is still in (held: on the same
+ *                                                       // side only what is 20 degrees steeper than the bank asked for)
  *
  *   The collective is always computed from the measured tilt, never taken from the stick, so the vertical force is the
  *   lift stick's whatever the speed stick and through every change of attitude:
@@ -106,7 +110,8 @@
  *   Forward speed (throttle stick): the speed is in g of drag, the horizontal thrust that holds it in steady flight,
  *   so no m/s calibration is needed. It comes from the same filtered accelerometer drag as the ball. The rotor drag
  *   grows as sqrt(thrust), so the drag is divided by sqrt(T) first, and a hard bank does not read as more speed:
- *     v       = -deadband(forwardDrag)                 // forwardDrag levelled with the measured attitude, see the ball
+ *     v       = deadband(|drag|)                       // the size of the levelled horizontal drag, signed by the travel
+ *                                                      // direction (see the ball), not only its part along the track
  *     vTarget = 2 * min(speedStick, 0.5) * midSpeed      // lower half: 0 to bank_mid_speed
  *     Fx      = vTarget + Kp * (vTarget - v)             // feedforward + P, no integrator; above a third of the stick
  *                                                        // the P term only adds (max(vTarget - v, 0)): no braking
@@ -123,8 +128,11 @@
  *
  *   Looking into the turn: the turn is flown as a car on a banked track, nose along the track, and the mode adds a
  *   head check of its own on top, set by the sticks alone: the more Bank against Speed, the further the nose looks
- *   into the turn. Full Speed with a little Bank looks a little in, low Speed with a big Bank up to 90 degrees:
- *     offset = -sign(bankStick) * atan2(|bankStick|, speedStick) * min(|bankStick| / 0.2, 1) + yawStick * headCheckRange
+ *   into the turn, towards the forward and turning forces the sticks ask for. Full Speed with a little Bank looks a
+ *   little in, low Speed with a big Bank up to 90 degrees. bank_look_turn scales it, from 0 (look dot: the nose along
+ *   the direction of travel) to 100 (look turn):
+ *     offset = -sign(bankStick) * atan2(|bankStick|, speedStick) * min(|bankStick| / 0.2, 1) * lookTurn
+ *              + yawStick * headCheckRange
  *   It depends on nothing measured, so it cannot chase the attitude loop (taken from the measured tilt seen through
  *   the offset, the look ran ahead of a nose that lagged it and put the roll on the wrong side of the bank).
  *
@@ -197,6 +205,7 @@
 #define BANK_TURN_MIN_SPEED     0.1f    // g of drag: below this the feedforward fades out to nothing at rest
 #define BANK_TURN_LEARN_TAU_S   2.0f    // how fast the ball integrator is moved into the turn gain
 #define BANK_TURN_LEARN_MIN_TAN 0.18f   // tan(10 degrees): the turn gain is only learnt in a real bank
+#define BANK_TURN_LEARN_FULL_TAN 1.0f   // tan(45 degrees): and at its full rate only from this bank up
 #define BANK_ROLLING_DEG        20.0f   // the bank asked for and the one flown this far apart: the craft is rolling
 #define BANK_FORWARD_TILT_RATE  180.0f  // deg/s: how fast the forward tilt may grow once the craft is not rolling
 #define BANK_REVERSE_MAX_TILT_DEG 15.0f // tilted further forward than this the craft is not reversing (bankCanReverse())
@@ -253,6 +262,13 @@ static float bankTiltCosMin(float fz, float thrustToWeight)
     return (1.0f + fz) / fmaxf(tiltThrust, BANK_MIN_TILT_COS);
 }
 
+// The steepest bank the thrust allows for the vertical force fz, with its reserve.
+static float bankMaxBank(float fz, float thrustToWeight)
+{
+    const float tw = fmaxf(thrustToWeight, 1.0f);
+    return acosf(constrainf(bankTiltCosMin(constrainf(fz, -1.0f, tw - 1.0f), tw), 0.0f, 1.0f));
+}
+
 // heldBank is the bank the craft is still in (measured, travel frame): the forward tilt is given what is left beside the
 // steeper of it and the bank asked for. Beside the bank asked for alone, flicking the bank stick from one side to the
 // other passes the target through level while the craft is still banked at 75 degrees, and the forward tilt took the
@@ -265,10 +281,17 @@ STATIC_UNIT_TESTED float bankLimitTilt(float fz, float *theta, float *phi, float
 
     const float cosTiltMin = bankTiltCosMin(fz, tw);
 
-    const float phiMax = acosf(constrainf(cosTiltMin, 0.0f, 1.0f));
+    const float phiMax = bankMaxBank(fz, tw);
     *phi = constrainf(*phi, -phiMax, phiMax);
 
-    const float cosPhi = fmaxf(fminf(cosf(*phi), cosf(heldBank)), BANK_MIN_TILT_COS);
+    // On the same side as the bank asked for, the bank flown counts only once it is BANK_ROLLING_DEG steeper (rolling
+    // out, where the forward tilt does not grow anyway): closer, it is the attitude loop overshooting. In a full bank the
+    // total tilt overshoots the thrust limit by a few degrees, and beside the bank flown that left no forward tilt at
+    // all: the forward tilt was cut, regrew and was cut again twice a second, and seen from the nose looking into the
+    // turn the roll swung from one side to the other (the owner's webfpv-bank-20261017-151904.csv, 93 to 101 s)
+    const bool sameSide = *phi * heldBank > 0.0f;
+    const float held = sameSide ? fmaxf(fabsf(heldBank) - DEGREES_TO_RADIANS(BANK_ROLLING_DEG), 0.0f) : heldBank;
+    const float cosPhi = fmaxf(fminf(cosf(*phi), cosf(held)), BANK_MIN_TILT_COS);
     const float thetaMax = acosf(constrainf(cosTiltMin / cosPhi, 0.0f, 1.0f));
     *theta = constrainf(*theta, -thetaMax, thetaMax);
 
@@ -465,6 +488,16 @@ STATIC_UNIT_TESTED bool bankCanReverse(float heldPitch)
     return heldPitch < DEGREES_TO_RADIANS(BANK_REVERSE_MAX_TILT_DEG);
 }
 
+// +1 travelling forwards, -1 clearly backwards, and a ramp between. Forwards by default, so sideways slip from rest
+// turns the nose towards it. Only clear backwards travel flips the sign, so the tail follows the travel like a reversing
+// car instead of the loop going unstable. forwardDrag is the travel frame drag (positive when travelling backwards).
+static float bankTravelDirection(float forwardDrag, float deadband, bool canReverse)
+{
+    const float flipStart = fmaxf(deadband, BANK_MIN_FLIP_DRAG);
+    const float backwards = canReverse ? constrainf((forwardDrag - flipStart) / flipStart, 0.0f, 1.0f) : 0.0f;
+    return 1.0f - 2.0f * backwards;
+}
+
 // The "ball" of a turn-and-slip indicator: the lateral specific force (g) seen from the head-check frame,
 // signed so that a positive value asks for a counter-clockwise (positive) yaw. Zero when the craft is
 // neither slipping nor skidding. dragX/dragY are the filtered accelerometer X/Y readings in g, levelled by
@@ -480,13 +513,18 @@ STATIC_UNIT_TESTED float bankCalcBall(float dragX, float dragY, float offset, fl
     bankDragToTravelFrame(dragX, dragY, offset, &forwardDrag, &lateral);
     lateral = fapplyDeadband(lateral, deadband);
 
-    // Forwards by default, so sideways slip from rest turns the nose towards it. Only clear backwards travel flips
-    // the sign, so the tail follows the travel like a reversing car instead of the loop going unstable.
-    const float flipStart = fmaxf(deadband, BANK_MIN_FLIP_DRAG);
-    const float backwards = canReverse ? constrainf((forwardDrag - flipStart) / flipStart, 0.0f, 1.0f) : 0.0f;
-    const float direction = 1.0f - 2.0f * backwards;
+    return -bankTravelDirection(forwardDrag, deadband, canReverse) * lateral;
+}
 
-    return -direction * lateral;
+// The speed, in g of drag: the size of the levelled horizontal drag, signed forwards or backwards like the ball. Not
+// only its part along the track: in a hard bank the nose can be far off the track (the yaw busy turning, or the ball
+// blind past 70 degrees of bank), and the part along the track then reads a fraction of the speed. At 6 to 12 m/s with
+// the nose 120 degrees off the track it read 0.1 g of drag, and the turn feedforward, divided by the speed, held the yaw
+// at its limit and drove the nose further round (the owner's webfpv-bank-20261017-151904.csv, 94 to 97 s).
+STATIC_UNIT_TESTED float bankSpeedFromDrag(float forwardDrag, float lateralDrag, float deadband, bool canReverse)
+{
+    const float size = sqrtf(sq(forwardDrag) + sq(lateralDrag));
+    return fapplyDeadband(bankTravelDirection(forwardDrag, deadband, canReverse) * size, deadband);
 }
 
 // The speed asked for by the lower half of the speed stick (0..0.5), in g of drag: from 0 at the bottom to
@@ -535,12 +573,16 @@ STATIC_UNIT_TESTED float bankSpeedForce(float speedStick, float v, float midSpee
     return fx + (2.0f * stick - 1.0f) * (fmaxf(maxForce, fx) - fx);
 }
 
-// Forward tilt that gives the forward force fx at the vertical force fz: theta = atan(fx / lift), lift = 1 + fz.
+// Forward tilt that gives the forward force fx at the vertical force fz beside the bank whose cosine is cosBank:
+// theta = atan(fx * cos(bank) / lift), lift = 1 + fz. The tilt is the forward tilt first and the bank about the tilted
+// axis (bankRotateTilt()), so the thrust's forward share is lift * tan(theta) / cos(bank): taken as atan(fx / lift), the
+// forward force in a bank came out 1 / cos(bank) times too big, four times at 76 degrees, and a held full bank surged
+// from 8 to 13 m/s in a third of a second whenever the bank left room for it.
 // Tilting back to brake is limited to maxBrakeTilt. Forward the tilt is only limited by the thrust (bankLimitTilt()).
-STATIC_UNIT_TESTED float bankForceToTilt(float fx, float fz, float maxBrakeTilt)
+STATIC_UNIT_TESTED float bankForceToTilt(float fx, float fz, float cosBank, float maxBrakeTilt)
 {
     const float lift = fmaxf(1.0f + fz, BANK_MIN_LIFT);
-    return fmaxf(atanf(fx / lift), -maxBrakeTilt);
+    return fmaxf(atanf(fx * constrainf(cosBank, 0.0f, 1.0f) / lift), -maxBrakeTilt);
 }
 
 // A coordinated turn needs a yaw rate of g * tan(bank) / v, so when the bank is taken off, the rate the integrator
@@ -577,6 +619,25 @@ STATIC_UNIT_TESTED float bankCoordinatedBankLimit(float speed, float turnGain, f
     return fmaxf(atanf(tanMax), DEGREES_TO_RADIANS(BANK_MIN_BANK_LIMIT_DEG));
 }
 
+// The speed, in g of drag, at which the yaw can follow a coordinated turn at this bank: bankCoordinatedBankLimit()
+// turned round. A full bank on the simulator's five inch needs about 0.29 g of drag (11 m/s).
+STATIC_UNIT_TESTED float bankCoordinatedSpeed(float bank, float turnGain, float maxYawRate)
+{
+    return fabsf(tanf(bank)) * fmaxf(turnGain, 1.0f) / (BANK_TURN_RATE_SHARE * fmaxf(maxYawRate, 1.0f));
+}
+
+// While the bank asked for is held back to the turn the yaw can follow, the forward force is no more than a speed loop
+// towards the speed at which that bank can be flown (feedforward + P, as the speed stick's). Without it the forward tilt
+// took whatever thrust the held back bank left: near the thrust limit a bank 5 degrees short leaves 40 degrees of
+// forward tilt, so the speed came back within a fraction of a second, the limit let the bank in again, and the forward
+// tilt went: a held full bank pumped between bank and forward tilt about once a second (seen from the nose looking into
+// the turn, the roll swung from one side to the other). The speed then settles where the bank asked for is coordinated.
+// The speed stick still brakes: the smaller of the two forces is taken.
+STATIC_UNIT_TESTED float bankTurnSpeedForce(float forwardForce, float turnSpeed, float speed, float kp)
+{
+    return fminf(forwardForce, turnSpeed + kp * (turnSpeed - speed));
+}
+
 // Learns the turn gain in a steady banked turn: the yaw rate the ball integrator still has to hold is a turn gain error,
 // so it is moved into the gain bit by bit, with the total yaw rate unchanged at that instant. Returns the new gain.
 STATIC_UNIT_TESTED float bankLearnTurnGain(float turnGain, float bankTan, float speed, float dt, float *integrator)
@@ -584,7 +645,12 @@ STATIC_UNIT_TESTED float bankLearnTurnGain(float turnGain, float bankTan, float 
     if (fabsf(bankTan) < BANK_TURN_LEARN_MIN_TAN || speed < BANK_TURN_MIN_SPEED) {
         return turnGain;
     }
-    const float moved = *integrator * dt / (BANK_TURN_LEARN_TAU_S + dt);
+    // The gain is the integrator over tan(bank), so in a shallow bank a small error in the ball (a sink puts air
+    // through the tilted props, which reads as slip) is a big error in the gain: it went from 25 to 32 in half a second
+    // at 10 to 25 degrees of bank in the owner's flight, and the full banks after it were limited for a gain a third
+    // too high. So it is learnt at full rate only from BANK_TURN_LEARN_FULL_TAN up, slower in proportion below.
+    const float weight = fminf(fabsf(bankTan) / BANK_TURN_LEARN_FULL_TAN, 1.0f);
+    const float moved = *integrator * weight * dt / (BANK_TURN_LEARN_TAU_S + dt);
     const float newGain = constrainf(turnGain - moved * speed / bankTan,
         BANK_TURN_GAIN_PRIOR / BANK_TURN_GAIN_RANGE, BANK_TURN_GAIN_PRIOR * BANK_TURN_GAIN_RANGE);
     // only what the gain took is taken out of the integrator, so a clamped gain leaves the rest to the ball
@@ -693,19 +759,26 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     float heldBank = measuredRoll;
     bankRotateTilt(&heldPitch, &heldBank, -state->headCheckOffset);
     const bool canReverse = bankCanReverse(heldPitch);
-    // forward speed in g of drag, positive forwards (the drag points backwards)
-    float speed = fapplyDeadband(-forwardDrag, config->speedDeadband / 1000.0f);
+    // the speed in g of drag, positive forwards (the drag points backwards)
+    float speed = bankSpeedFromDrag(forwardDrag, lateralDrag, config->speedDeadband / 1000.0f, canReverse);
     if (!canReverse) {
         speed = fmaxf(speed, 0.0f);
     }
     state->speed = speed;
     const float midSpeed = config->midSpeed / 100.0f;
     const float targetSpeed = bankTargetSpeed(speedStick, midSpeed);
-    const float forwardForce = bankSpeedForce(speedStick, speed, midSpeed, config->speedKp / 100.0f,
+    float forwardForce = bankSpeedForce(speedStick, speed, midSpeed, config->speedKp / 100.0f,
         bankMaxForwardForce(fz, trimmedThrustToWeight));
     const float coordinatedBank = bankCoordinatedBankLimit(speed, state->turnGain, config->yawMaxRate);
+    // The bank asked for, as far as the thrust allows it: held back further by the yaw, the speed is held for it
+    const float thrustBank = fminf(fabsf(phi), bankMaxBank(fz, trimmedThrustToWeight));
+    if (thrustBank > coordinatedBank) {
+        forwardForce = bankTurnSpeedForce(forwardForce, bankCoordinatedSpeed(thrustBank, state->turnGain, config->yawMaxRate),
+            speed, config->speedKp / 100.0f);
+    }
     phi = constrainf(phi, -coordinatedBank, coordinatedBank);
-    float theta = bankForceToTilt(forwardForce, fz, maxBrakeTilt);
+    // the bank the tilt is beside: the one asked for, as far as the thrust and the yaw allow
+    float theta = bankForceToTilt(forwardForce, fz, cosf(fminf(thrustBank, coordinatedBank)), maxBrakeTilt);
 
     fz = bankLimitTilt(fz, &theta, &phi, heldBank, trimmedThrustToWeight);
     const bool rolling = fabsf(phi - heldBank) > DEGREES_TO_RADIANS(BANK_ROLLING_DEG);
@@ -718,7 +791,12 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     // asked for, flicking the bank stick from one side to the other turned the nose the new way at once, while the
     // craft, still banked the old way, went on turning the old way: the nose swung 35 to 45 degrees off the track and
     // fishtailed back, and the earth-referenced yaw pitched the nose up 15 to 25 degrees on the way through.
-    const float heldBankTan = tanf(constrainf(heldBank, -DEGREES_TO_RADIANS(BANK_MAX_HELD_BANK_DEG), DEGREES_TO_RADIANS(BANK_MAX_HELD_BANK_DEG)));
+    // No steeper than the turn the yaw can follow, so the feedforward stays within BANK_TURN_RATE_SHARE of the yaw limit.
+    // The bank flown is the measured tilt seen through the look, and with the nose past the look (the yaw at its limit)
+    // a forward tilt reads as bank: fed forward up to 85 degrees at low speed, it held the yaw at its limit and turned
+    // the nose further past the look, 50 to 70 degrees beyond it in the owner's full banks.
+    const float heldBankLimit = fminf(coordinatedBank, DEGREES_TO_RADIANS(BANK_MAX_HELD_BANK_DEG));
+    const float heldBankTan = tanf(constrainf(heldBank, -heldBankLimit, heldBankLimit));
     state->ballBankTan = bankScaleBallIntegrator(bankTan, state->ballBankTan, &state->ballIntegrator);
     const float collective = bankCalcCollective(fz, bankCollectiveTiltCos(measuredTiltCos, fz, trimmedThrustToWeight),
         trimmedThrustToWeight);
@@ -728,7 +806,9 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     // into the body frame, so the thrust in the world frame, and with it the track, is the same whichever way the nose
     // looks.
     const float previousOffset = state->headCheckOffset;
-    const float offsetTarget = bankLookIntoTurnOffset(rollStick, speedStick) + yawStick * DEGREES_TO_RADIANS(config->headCheckRange);
+    // bank_look_turn scales the look from none (look dot: the nose along the direction of travel) to all of it (look turn)
+    const float offsetTarget = bankLookIntoTurnOffset(rollStick, speedStick) * (config->lookTurn / 100.0f)
+        + yawStick * DEGREES_TO_RADIANS(config->headCheckRange);
     const float offsetRate = DEGREES_TO_RADIANS(config->headCheckRate);
     state->headCheckOffset = bankSlewHeadCheck(previousOffset, offsetTarget, offsetRate, in->dt);
     // Slewing while the offset is held back by the rate: the look follows the tilt and moves a little on every update in
@@ -750,8 +830,11 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
         // the yaw loop's lag behind the offset, not a slip. Integrating or learning from that would leave a yaw rate
         // behind that turns the nose away from the offset once the slew stops, and the ball deadband would hold it there.
         // The same while the craft rolls: the ball then shows the roll, not a slip.
+        // Nor while the yaw is at its limit: the rate asked for is not flown, so the ball does not move for what the
+        // integrator adds, and it winds up (in a sink at low speed it held the yaw at the limit for a second and more)
+        const bool yawSaturated = fabsf(out->yawRateDps) >= maxYawRate;
         float ballKi = 0.0f;
-        if (!headCheckSlewing && !rolling) {
+        if (!headCheckSlewing && !rolling && !yawSaturated) {
             ballKi = config->ballKi;
             state->turnGain = bankLearnTurnGain(state->turnGain, heldBankTan, speed, in->dt, &state->ballIntegrator);
         }
