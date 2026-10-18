@@ -37,6 +37,9 @@ extern "C" {
     #include "io/beeper.h"
     #include "pg/bank_mode.h"
     #include "pg/pg.h"
+    #include "pg/pg_ids.h"
+    #include "pg/rx.h"
+    #include "rx/rx.h"
     #include "sensors/acceleration.h"
 
     extern uint8_t __config_start;
@@ -45,6 +48,9 @@ extern "C" {
     acc_t acc;
     attitudeEulerAngles_t attitude;
     float rcCommand[4];
+    float rcData[MAX_SUPPORTED_RC_CHANNEL_COUNT];
+
+    PG_REGISTER(rxConfig_t, rxConfig, PG_RX_CONFIG, 0);
 
     float testDeflection[3];
     throttleStatus_e testThrottleStatus = THROTTLE_HIGH;
@@ -62,6 +68,7 @@ extern "C" {
     float bankThrustFromCollective(float collective, float thrustToWeight);
     float bankCollectiveFromThrust(float thrust, float thrustToWeight);
     void bankRotate(float *forward, float *right, float angle);
+    float bankShapeSpeedStick(float stick);
     float bankTargetSpeed(float speedStick, float midSpeed);
     float bankSpeedForce(float speedStick, float v, float midSpeed, float maxForce);
     float bankTiltThrust(float lift, float thrustToWeight);
@@ -209,6 +216,63 @@ TEST(BankModeTest, SpeedStickIsASpeedInTheLowerHalfAndAForceInTheUpperHalf)
     // continuous at the centre, and the top is all the force there is
     EXPECT_NEAR(bankSpeedForce(0.5f, 0.2f, mid, maxForce), bankSpeedForce(0.5001f, 0.2f, mid, maxForce), 1e-3f);
     EXPECT_FLOAT_EQ(maxForce, bankSpeedForce(1.0f, 0.2f, mid, maxForce));
+}
+
+TEST(BankModeTest, SpeedStickHasAStopBandAndKeepsItsCentre)
+{
+    EXPECT_FLOAT_EQ(0.0f, bankShapeSpeedStick(0.0f));
+    EXPECT_FLOAT_EQ(0.0f, bankShapeSpeedStick(0.1f));
+    EXPECT_GT(bankShapeSpeedStick(0.11f), 0.0f);
+    EXPECT_FLOAT_EQ(0.5f, bankShapeSpeedStick(0.5f));
+    EXPECT_FLOAT_EQ(0.75f, bankShapeSpeedStick(0.75f));
+    EXPECT_FLOAT_EQ(1.0f, bankShapeSpeedStick(1.0f));
+}
+
+TEST(BankModeTest, TargetSpeedCarriesOnBelowTheStopAsAReverse)
+{
+    const float mid = 0.5f;
+    // full reverse is the lower half's line carried on below the stop: a tenth of the mid speed, backwards
+    EXPECT_FLOAT_EQ(-0.1f * mid, bankTargetSpeed(-0.05f, mid));
+    EXPECT_FLOAT_EQ(-0.1f * mid, bankTargetSpeed(-1.0f, mid));
+    EXPECT_FLOAT_EQ(0.1f * mid, bankTargetSpeed(0.05f, mid));
+    // from rest full reverse pushes backwards; braking from speed it pushes harder than the stop does
+    EXPECT_LT(bankSpeedForce(-0.05f, 0.0f, mid, 3.0f), 0.0f);
+    EXPECT_LT(bankSpeedForce(-0.05f, 0.3f, mid, 3.0f), bankSpeedForce(0.0f, 0.3f, mid, 3.0f));
+    // once going backwards at the reverse speed it holds it
+    EXPECT_FLOAT_EQ(-0.1f * mid, bankSpeedForce(-0.05f, -0.1f * mid, mid, 3.0f));
+}
+
+TEST(BankModeTest, ReverseOnlyOnceTheSpeedStickHasBeenRaisedSinceArming)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.reverse = 1.0f;
+    computeN(&in, &state, &out, 10);
+    EXPECT_FLOAT_EQ(0.0f, out.pitchDeg);
+
+    in.speed = 0.08f;                       // within the stop band: still locked
+    computeN(&in, &state, &out, 1);
+    in.speed = 0.0f;
+    computeN(&in, &state, &out, 10);
+    EXPECT_FLOAT_EQ(0.0f, out.pitchDeg);
+
+    in.reverse = 0.0f;
+    in.speed = 0.2f;
+    computeN(&in, &state, &out, 1);
+    in.speed = 0.0f;
+    in.reverse = 1.0f;
+    computeN(&in, &state, &out, 10);
+    EXPECT_LT(out.pitchDeg, -1.0f);         // nose up: pushing backwards
+    EXPECT_GT(out.pitchDeg, -30.0f);        // a small push, within the brake angle
+
+    // disarming locks it again
+    in.armed = false;
+    computeN(&in, &state, &out, 1);
+    in.armed = true;
+    computeN(&in, &state, &out, 10);
+    EXPECT_FLOAT_EQ(0.0f, out.pitchDeg);
 }
 
 TEST(BankModeTest, DragIsLevelledWithTheAttitude)
@@ -486,6 +550,8 @@ static void setUpUpdate(void)
     memset(&attitude, 0, sizeof(attitude));
     acc.dev.acc_1G_rec = 1.0f / 512.0f;
     rcCommand[THROTTLE] = 1000;     // Speed stick at the bottom
+    rcData[THROTTLE] = 1000;
+    rxConfigMutable()->mincheck = 1050;
     testThrottleStatus = THROTTLE_LOW;
     DISABLE_ARMING_FLAG(ARMED);
     testMotorMixRange = 0.0f;
@@ -495,12 +561,14 @@ TEST(BankModeTest, EngagedWithTheThrottleLowNoTiltUntilTheBankStickIsCentred)
 {
     setUpUpdate();
     ENABLE_FLIGHT_MODE(BANK_MODE);
+    ENABLE_ARMING_FLAG(ARMED);
     testDeflection[FD_YAW] = -1.0f;     // yaw stick right = bank right
     timeUs_t now = 1000;
     for (int i = 0; i < 10; i++, now += 10000) {
         bankModeUpdate(now);
     }
     EXPECT_FLOAT_EQ(0.0f, bankModeGetAngleTarget(FD_ROLL));
+    EXPECT_FLOAT_EQ(0.0f, bankModeGetAngleTarget(FD_PITCH));    // and no reverse with the stick at the bottom
 
     testDeflection[FD_YAW] = 0.0f;
     bankModeUpdate(now);
@@ -576,6 +644,36 @@ TEST(BankModeTest, UpdateReadsTheDragFromTheAccelerometer)
         bankModeUpdate(now);
     }
     EXPECT_GT(bankModeGetYawRate(), 0.0f);
+}
+
+TEST(BankModeTest, UpdateReadsTheReverseBelowMinCheck)
+{
+    setUpUpdate();
+    ENABLE_ARMING_FLAG(ARMED);
+    ENABLE_FLIGHT_MODE(BANK_MODE);
+    acc.accADC.z = 512.0f;
+    timeUs_t now = 1000;
+    bankModeUpdate(now);
+    // raised once above min_check, then back to the stop: no tilt
+    rcCommand[THROTTLE] = 1200;
+    rcData[THROTTLE] = 1240;
+    bankModeUpdate(now += 10000);
+    rcCommand[THROTTLE] = 1000;
+    rcData[THROTTLE] = 1050;
+    for (int i = 0; i < 10; i++) {
+        bankModeUpdate(now += 10000);
+    }
+    EXPECT_FLOAT_EQ(0.0f, bankModeGetAngleTarget(FD_PITCH));
+    // to the bottom: backwards; a radio that goes below 1000 is full reverse too
+    rcData[THROTTLE] = 1000;
+    for (int i = 0; i < 10; i++) {
+        bankModeUpdate(now += 10000);
+    }
+    const float fullReverse = bankModeGetAngleTarget(FD_PITCH);
+    EXPECT_LT(fullReverse, 0.0f);
+    rcData[THROTTLE] = 988;
+    bankModeUpdate(now += 10000);
+    EXPECT_FLOAT_EQ(fullReverse, bankModeGetAngleTarget(FD_PITCH));
 }
 
 TEST(BankModeTest, DebugModeBankLogsTheEstimates)

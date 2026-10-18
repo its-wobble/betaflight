@@ -57,8 +57,9 @@
  * positive nose-down, body axes are X forward, Y left, Z up, and yaw is positive counter-clockwise.
  *
  * Sticks (mode 2):
- *   throttle  Speed: the lower half is a speed target, 0 to bank_mid_speed; the upper half a forward force up to
- *             what the thrust allows. No reverse.
+ *   throttle  Speed: the lower half is a speed target, 0 to bank_mid_speed, with a stop band at the bottom; the upper
+ *             half a forward force up to what the thrust allows. Below min_check a small reverse, once the stick has
+ *             been raised since arming.
  *   pitch     Lift: 0 g at the bottom, 1 g at the centre, all the thrust at the top
  *   yaw       Bank: bank angle, the turn follows from it
  *   roll      head check: nose offset from the direction of travel, springs back at the centre
@@ -91,6 +92,8 @@
 #define BANK_MIN_LIFT           0.5f    // g, the lowest lift the tilt is computed for
 #define BANK_MAX_BRAKE_DEG      30.0f
 #define BANK_BRAKE_STICK        (1.0f / 3.0f)   // below this Speed stick a craft that is too fast is braked
+#define BANK_REVERSE_STICK      0.05f   // the reverse zone carries the Speed stick this far below 0
+#define BANK_STOP_STICK         0.10f   // Speed stick above min_check that still asks for no speed
 #define BANK_SPEED_KP           2.0f
 #define BANK_SPEED_DEADBAND     0.02f   // g of drag
 #define BANK_DRAG_FILTER_HZ     2.0f
@@ -166,19 +169,31 @@ STATIC_UNIT_TESTED void bankRotate(float *forward, float *right, float angle)
     *right = x * s + *right * c;
 }
 
-// Speed target of the lower half of the Speed stick, g of drag: 0 at the bottom to midSpeed at the centre.
-STATIC_UNIT_TESTED float bankTargetSpeed(float speedStick, float midSpeed)
+// The Speed stick above min_check, 0..1, with a stop band at the bottom: the lower half is stretched over what is
+// left, so the centre is still the centre.
+STATIC_UNIT_TESTED float bankShapeSpeedStick(float stick)
 {
-    return 2.0f * constrainf(speedStick, 0.0f, 0.5f) * midSpeed;
+    const float s = constrainf(stick, 0.0f, 1.0f);
+    if (s >= 0.5f) {
+        return s;
+    }
+    return 0.5f * fmaxf(s - BANK_STOP_STICK, 0.0f) / (0.5f - BANK_STOP_STICK);
 }
 
-// Forward force, g, from the Speed stick (0..1) and the speed v (g of drag).
+// Speed target of the lower half of the Speed stick, g of drag: 0 at the stop to midSpeed at the centre, and below
+// the stop (the reverse zone, a negative stick) backwards on the same line.
+STATIC_UNIT_TESTED float bankTargetSpeed(float speedStick, float midSpeed)
+{
+    return 2.0f * constrainf(speedStick, -BANK_REVERSE_STICK, 0.5f) * midSpeed;
+}
+
+// Forward force, g, from the Speed stick (-BANK_REVERSE_STICK..1) and the speed v (g of drag).
 // Lower half: feedforward plus P towards the target speed. Only the bottom third brakes a craft that is too fast;
 // above it the P term only adds and the craft coasts down to the target.
 // Upper half: a straight line from the centre's force to maxForce, with no speed hold.
 STATIC_UNIT_TESTED float bankSpeedForce(float speedStick, float v, float midSpeed, float maxForce)
 {
-    const float stick = constrainf(speedStick, 0.0f, 1.0f);
+    const float stick = constrainf(speedStick, -BANK_REVERSE_STICK, 1.0f);
     const float vTarget = bankTargetSpeed(stick, midSpeed);
     float error = vTarget - v;
     if (stick > BANK_BRAKE_STICK) {
@@ -328,8 +343,7 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     state->trimInflow = inflow;
 
     float bankStick = bankShapeStick(in->roll);
-    // no deadband here, min_check already gives the throttle one at the bottom
-    float speedStick = constrainf(in->speed, 0.0f, 1.0f);
+    float speedStick = bankShapeSpeedStick(in->speed);
     if (state->tiltLocked) {
         if (bankStick == 0.0f && speedStick == 0.0f) {
             state->tiltLocked = false;
@@ -337,6 +351,15 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
             bankStick = 0.0f;
             speedStick = 0.0f;
         }
+    }
+    // the stick is at the bottom for arming, so no reverse until it has been raised
+    if (!in->armed) {
+        state->reverseReady = false;
+    } else if (speedStick > 0.0f) {
+        state->reverseReady = true;
+    }
+    if (state->reverseReady) {
+        speedStick -= BANK_REVERSE_STICK * constrainf(in->reverse, 0.0f, 1.0f);
     }
     const float headStick = bankShapeStick(in->yaw);
     // the Lift stick springs back to the centre, so it gets the deadband there
@@ -422,6 +445,8 @@ void bankModeUpdate(timeUs_t currentTimeUs)
         // Bank on the yaw stick, the head check on the roll stick; the yaw deflection is positive to the left
         .roll = -getRcDeflection(FD_YAW),
         .speed = (rcCommand[THROTTLE] - PWM_RANGE_MIN) / (float)PWM_RANGE,
+        // rcCommand is flat below min_check, so the reverse zone reads the raw stick
+        .reverse = (rxConfig()->mincheck - rcData[THROTTLE]) / (float)MAX(rxConfig()->mincheck - PWM_RANGE_MIN, 1),
         .yaw = -getRcDeflection(FD_ROLL),
         .lift = 0.5f * (getRcDeflection(FD_PITCH) + 1.0f),
         .armed = ARMING_FLAG(ARMED),

@@ -34,6 +34,7 @@
 typedef struct bankInputs_s {
     float roll;                 // Bank stick, -1..1, positive right
     float speed;                // Speed stick, 0..1
+    float reverse;              // throttle stick below min_check, 0..1, 1 at the bottom
     float yaw;                  // head check stick, -1..1, positive counter-clockwise
     float lift;                 // Lift stick, 0..1, 0.5 = 1 g
     bool armed;
@@ -62,6 +63,7 @@ typedef struct bankState_s {
     float trimModelVertical;    // modelled vertical force, lagged like the motors, g
     float trimInflow;           // inflow through the props the trim was measured at, g of drag
     bool tiltLocked;            // engaged with the throttle low, no tilt until the sticks are centred
+    bool reverseReady;          // the Speed stick has left the reverse zone since arming
     timeUs_t lastUpdateUs;
 } bankState_t;
 

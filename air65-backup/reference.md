@@ -163,7 +163,7 @@ The settings run the MCU from its internal oscillator (`system_hse_mhz = 0`), wh
 ## Why this backup exists: bank mode firmware
 
 The owner develops a new Betaflight flight mode, **bank**, in a fork (its-wobble/betaflight, branch `banked-mode-init`; repo checkout `/workspaces/betaflight` in the dev container). Its design and terms are in that repo's `project_plan.md`. In bank mode the sticks become controls in the world frame:
-- the throttle stick is **Speed**: the lower half is a speed, with the bottom braking to a stop; the upper half is a forward force
+- the throttle stick is **Speed**: the lower half is a speed, with a stop band over about 5 to 15 % of the stick and a small reverse in the bottom 5 % (once the stick has been raised since arming); the upper half is a forward force
 - the pitch stick is **Lift**, a vertical force: bottom 0 g, centre 1 g, top full thrust
 - the yaw stick is **Bank**
 - the roll stick is the **head check**, which turns the nose without changing the track
@@ -246,6 +246,7 @@ Why this works:
 - In BANK, the collective × 1000 replaces exactly that term (`mixer.c`).
 - So the hover throttle in ANGLE is the collective BANK needs for 1 g, and the mode's model is thrust = T/W × collective^1.5.
 - `thr_mid`/`thr_expo` are at their defaults (50/0), so the throttle is linear. The Speed stick reads the same `rcCommand[THROTTLE]`, so a throttle curve would reshape Speed too.
+- BANK's reverse is the raw throttle below `min_check` (1050), so the radio's throttle low endpoint must reach well below it (ELRS's 988 to 1000 is fine). The stop is a band over the next 10 % above it.
 
 Telling whether the value is right, once flying BANK:
 - **Set too low:** the drone climbs at centre Lift right after take-off.
