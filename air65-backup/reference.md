@@ -30,7 +30,7 @@ SHA-1 of `air65_stock_full.bin` (fill in with `sha1sum air65_stock_full.bin`): `
 | Receiver | ExpressLRS, serial CRSF on UART3. A separate chip with its own firmware and binding |
 | ESCs | 4-in-1 on the board with their own firmware (not touched by FC flashing). Bidirectional DShot300, 12 pole motors, `yaw_motors_reversed = ON` (props out) |
 | Board orientation | `align_board_yaw = -135` |
-| System clock | **168 MHz from the internal oscillator (PLLR-HSI)**, because the settings contain `set system_hse_mhz = 0`. See "Clock caveat" |
+| System clock | **168 MHz from the internal oscillator (PLLR-HSI)**, because the settings contain `set system_hse_mhz = 0`. The board's 8 MHz crystal also works (PLLR-HSE). See "Clock caveat" |
 
 ### The IMU substitution card
 
@@ -81,7 +81,7 @@ The arming disable flags are normal with the CLI open and no battery. The gyro r
 
 The full list is in the backup file. These are the ones that matter for a restore or are easy to lose:
 
-- `system_hse_mhz = 0`: run from the internal oscillator. The board config's default is an 8 MHz crystal (`SYSTEM_HSE_MHZ 8`). BetaFPV changed this deliberately.
+- `system_hse_mhz = 0`: run from the internal oscillator. The board config's default is an 8 MHz crystal (`SYSTEM_HSE_MHZ 8`), which works on this board too. BetaFPV changed this deliberately.
 - `acc_calibration = -23,35,26,1`: accelerometer calibration. Losing it means recalibrating on a level surface.
 - `osd_displayport_device = MAX7456`, `vcd_video_system = NTSC`: the card's OSD fix.
 - Motors: `motor_pwm_protocol = DSHOT300`, `dshot_bidir = ON`, `motor_poles = 12`, `yaw_motors_reversed = ON`.
@@ -99,6 +99,8 @@ Mode switches (`aux <slot> <mode permanent ID> <AUX channel, 0 = AUX1> <low> <hi
 | *(none)* | acro | AUX2 high |
 | `aux 4 35 2 1700 2100 0 0` | FLIP OVER AFTER CRASH (turtle) | AUX3 high |
 | `aux 3 13 3 1700 2100 0 0` | BEEPER | AUX4 high |
+
+That table is the stock layout. Before the first bank flash the owner moved the switches. The current layout, from [restore-bank-firmware.txt](restore-bank-firmware.txt): ARM on AUX1 high; AUX3 low, middle and high are acro, ANGLE and BANK; AUX4 low is turtle and AUX4 middle is the beeper.
 
 ## How the flash image was made
 
@@ -148,7 +150,7 @@ Use this if the `.bin` is lost or damaged.
      git worktree add ../bf-stock e92c10887
      cd ../bf-stock && make arm_sdk_install && make configs && make CONFIG=BETAFPVG473_V2
      ```
-2. Flash it **without full chip erase** (see "Clock caveat").
+2. Flash it. Full chip erase is safe (see "Clock caveat").
 3. Paste the `diff all` file into the CLI. It ends with `save`. Check the output for errors.
 4. Verify `status` as in A.4.
 
@@ -158,7 +160,11 @@ The STM32's bootloader is in read-only ROM, so the board cannot be bricked by fl
 
 ### Clock caveat
 
-The settings run the MCU from its internal oscillator (`system_hse_mhz = 0`), while the board config's default is an 8 MHz crystal. A **full chip erase** wipes the setting, so the first boot after it would try the crystal before the settings can be pasted back. It is not known whether this board has a working crystal or what the firmware does if it doesn't. So flash **without full chip erase**: Betaflight keeps saved settings across an update (it resets only setting groups whose layout changed), then paste the `diff all` on top anyway. After any flash, check that `status` still shows `PLLR-HSI`. If USB never comes back, use C.
+The stock settings run the MCU from its internal oscillator (`system_hse_mhz = 0`), while the board config's default is an 8 MHz crystal. A reset to defaults (a full chip erase, or a firmware whose config layout changed) wipes that setting, so the first boot uses the crystal.
+
+This was first a worry because nobody knew whether the board had a working crystal. The first bank flash on 2026-10-18 (`60d5750ad`) settled it. Its settings came up at defaults, and `status` showed `CLK=168MHz (PLLR-HSE)` with everything detected (see `diff all after flash BTFL_cli_20261018_162116_BETAFPVG473_V2.txt`). So the crystal works, and **full chip erase is safe**.
+
+After a reset, pasting the settings back puts `system_hse_mhz = 0` back, and the board returns to the internal oscillator after the save. Either clock runs at 168 MHz. If USB never comes back after a flash, use C.
 
 ## Why this backup exists: bank mode firmware
 
@@ -177,8 +183,8 @@ Facts for putting it on this drone:
   make CONFIG=BETAFPVG473_V2 OPTIONS="USE_BANK_MODE"
   ```
   A trial build on 2026-10-18 used 79% of flash and 68% of RAM. Output: `obj/betaflight_<version>_STM32G474_BETAFPVG473_V2.hex`.
-- **Flashing:** Betaflight App, "Load Firmware [Local]", full chip erase **off**. Then paste the `diff all` and check `status`.
-- **Mode:** BANK has permanent mode ID 59. The plan is to put it on AUX2 high in place of acro, so AUX2 low (ANGLE) is the bail-out: `aux 5 59 1 1700 2100 0 0`.
+- **Flashing:** step by step in [flashing.md](flashing.md).
+- **Mode:** BANK has permanent mode ID 59. It is on AUX3 high, so AUX3 middle (ANGLE) is the bail-out: `aux 4 59 2 1700 2100 0 0`.
 - **Settings:**
   - `bank_thrust_to_weight` (x100, default 570, for the sim's 5-inch) must be measured for this drone. Hover in Angle with blackbox on and take c = (`rcCommand[3]` − 1000) / 1000 averaged over the hover; the setting is 100 / c^1.5.
   - `bank_mid_speed` (x100 g of drag, default 50): lower it (e.g. 10) for the first flights.
@@ -211,26 +217,21 @@ Facts for putting it on this drone:
 - **Moving the hex across:** download `obj/betaflight_<version>_STM32G474_BETAFPVG473_V2.hex` from the VS Code explorer (right-click, Download).
 - **Before building for the drone,** run the bank checks as for any bank change: `make test_bank_unittest`, then the sim check (`bank-sim-loop` skill). Note the exact commit, and any uncommitted changes, that each hex was built from.
 
-### After flashing the bank firmware
+### Flashing the bank firmware
 
-1. **Flash without full chip erase**, then paste the stock `diff all` (see "Clock caveat").
-2. **Paste the bank settings:**
-   ```
-   aux 5 59 1 1700 2100 0 0
-   set debug_mode = BANK
-   set blackbox_sample_rate = 1/16
-   set bank_mid_speed = 10
-   set runaway_takeoff_prevention = OFF
-   save
-   ```
-   Add `set bank_thrust_to_weight = <measured>` once it has been measured (next section).
+The steps (build, flash, restore the settings, checks) are in [flashing.md](flashing.md). The settings to paste are in [restore-bank-firmware.txt](restore-bank-firmware.txt), which holds the stock tune, the current switches and these bank lines:
 
-   **Reminder: runaway takeoff.** Turn it off (above) until the firmware is fixed. In BANK it can disarm the drone in mid-air. The check switches itself off once the throttle *stick* has been above 20 % (with a stick deflected) for 0.5 s, or above 40 %. In BANK that stick is Speed, not the motor power (`core.c`, `calculateThrottlePercentAbs()`). After a launch in BANK, with Speed in the lower half, the check stays on all flight. It then disarms whenever a PID sum passes 60 % for 75 ms while the craft is rotating: a hard Bank entry, a hard brake or a touch on a wall. Under BANK, airmode's start latch (`airmode_start_throttle_percent = 25`) reads the same stick. The fix is to use the collective as the throttle percent under BANK in both places (open in `project_plan.md`, "Real hardware"). Once the fix is in, set it back `ON`.
-3. **Check:**
-   - `version` shows the fork's commit, not `e92c10887`.
-   - `status` still shows `BMI270` and `168MHz (PLLR-HSI)`.
-   - `get bank` lists the four settings: `bank_thrust_to_weight`, `bank_head_check_range`, `bank_look_turn` and `bank_mid_speed`.
-   - The Modes tab shows BANK on AUX2 high.
+```
+aux 4 59 2 1700 2100 0 0
+set debug_mode = BANK
+set blackbox_sample_rate = 1/16
+set bank_mid_speed = 10
+set runaway_takeoff_prevention = OFF
+```
+
+Add `set bank_thrust_to_weight = <measured>` once it has been measured (see "Measuring `bank_thrust_to_weight`").
+
+**Reminder: runaway takeoff.** Keep it off (above) until the firmware is fixed. In BANK it can disarm the drone in mid-air. The check switches itself off once the throttle *stick* has been above 20 % (with a stick deflected) for 0.5 s, or above 40 %. In BANK that stick is Speed, not the motor power (`core.c`, `calculateThrottlePercentAbs()`). After a launch in BANK, with Speed in the lower half, the check stays on all flight. It then disarms whenever a PID sum passes 60 % for 75 ms while the craft is rotating: a hard Bank entry, a hard brake or a touch on a wall. Under BANK, airmode's start latch (`airmode_start_throttle_percent = 25`) reads the same stick. The fix is to use the collective as the throttle percent under BANK in both places (open in `project_plan.md`, "Real hardware"). Once the fix is in, set it back `ON`.
 
 About the logging rate: bank mode updates once per RX frame, about 250 Hz with this ELRS link, so logging at 1/16 (200 Hz from the 3.2 kHz loop) captures it while stretching the 2 MB flash. How many minutes that holds is an estimate; check it on the first flight. Use 1/4 or higher only for a gyro or PID question.
 
@@ -260,7 +261,7 @@ Use a battery, with props off, and the radio bound.
 
 | Do | Expect |
 |---|---|
-| Flick AUX2 through its positions | Modes tab and OSD show ANGLE, HORIZON, BANK |
+| Flick AUX3 through its positions | Modes tab and OSD show acro, ANGLE, BANK |
 | Sensors tab, drone level and still | Accelerometer about 1 g on Z, about 0 on X and Y |
 | Arm in ANGLE, throttle low, flick to BANK with the right stick centred | Motors rise to about hover power: Lift centre is 1 g |
 | In BANK, pull the right stick fully back | Motors drop to idle (0 g Lift) and keep stabilising (airmode is on) |
