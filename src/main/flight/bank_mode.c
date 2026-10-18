@@ -66,8 +66,9 @@
  *
  * The sticks set a thrust vector in the travel frame (x forward along the track, r to the right, z up):
  *   z = Lift,  r = Lift * tan(bank),  x = the forward force for the Speed stick
- * Thrust priority is Lift, then Bank, then Speed: the horizontal part (x, r) gets at most H = sqrt(Tb^2 - Lift^2),
- * Tb leaving a quarter of the spare thrust to the attitude loop, and r is taken out of it first. The vector is rotated
+ * Thrust priority is Lift, then Bank, then Speed, but a brake comes before Bank: the horizontal part (x, r) gets at
+ * most H = sqrt(Tb^2 - Lift^2), Tb leaving a quarter of the spare thrust to the attitude loop, and a braking x is
+ * taken out of it first, then r, then a forward x. The vector is rotated
  * by the nose offset (head check and look into the turn), so the nose moves but the track doesn't, and becomes
  *   pitch = asin(x / |thrust|),  roll = atan2(r, z),  collective from Lift / cos(measured tilt)
  *
@@ -213,15 +214,18 @@ STATIC_UNIT_TESTED float bankTiltThrust(float lift, float thrustToWeight)
     return lift + BANK_TILT_THRUST_SHARE * fmaxf(thrustToWeight - lift, 0.0f);
 }
 
-// The horizontal part of the thrust vector in the travel frame, limited in priority order: Bank takes what it needs of
-// the horizontal force budget, the forward force gets what is left. bankStick -1..1 is the bank angle as a share of
-// 90 degrees.
+// The horizontal part of the thrust vector in the travel frame, limited in priority order: a brake (a negative forward
+// force, at most a BANK_MAX_BRAKE_DEG tilt back) is taken out of the horizontal force budget first, Bank takes what it
+// needs of the rest, and a forward force gets what is left. bankStick -1..1 is the bank angle as a share of 90 degrees.
 STATIC_UNIT_TESTED void bankThrustVector(float lift, float horizontal, float bankStick, float forwardForce, float *forward, float *right)
 {
-    const float bank = fminf(fabsf(bankStick) * M_PIf / 2.0f, atan2f(horizontal, lift));
+    const float brakeMax = fminf(lift * tanf(DEGREES_TO_RADIANS(BANK_MAX_BRAKE_DEG)), horizontal);
+    const float brake = fminf(fmaxf(-forwardForce, 0.0f), brakeMax);
+    const float bankMax = atan2f(sqrtf(fmaxf(sq(horizontal) - sq(brake), 0.0f)), lift);
+    const float bank = fminf(fabsf(bankStick) * M_PIf / 2.0f, bankMax);
     *right = copysignf(lift * tanf(bank), bankStick);
     const float forwardMax = sqrtf(fmaxf(sq(horizontal) - sq(*right), 0.0f));
-    *forward = constrainf(forwardForce, -fminf(lift * tanf(DEGREES_TO_RADIANS(BANK_MAX_BRAKE_DEG)), forwardMax), forwardMax);
+    *forward = forwardForce < 0.0f ? -brake : fminf(forwardForce, forwardMax);
 }
 
 // Levels the body-frame drag with the measured attitude, assuming horizontal travel: forward and left along the nose's

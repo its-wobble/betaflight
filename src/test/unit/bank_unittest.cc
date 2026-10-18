@@ -194,11 +194,37 @@ TEST(BankModeTest, BankTakesTheHorizontalForceBeforeSpeed)
     EXPECT_NEAR(-horizontal, right, 1e-4f);
     EXPECT_NEAR(0.0f, forward, 1e-2f);
 
-    // braking is limited to a 30 degree tilt back, and to what the bank leaves
+    // braking is limited to a 30 degree tilt back
     bankThrustVector(2.0f, horizontal, 0.0f, -10.0f, &forward, &right);
     EXPECT_NEAR(-2.0f * tanf(30.0f * DEG), forward, 1e-5f);
+}
+
+TEST(BankModeTest, ABrakeTakesTheHorizontalForceBeforeBank)
+{
+    const float horizontal = 3.0f;
+    const float brake = tanf(30.0f * DEG);
+    float forward;
+    float right;
+
+    // full Bank still brakes as hard as level, and banks with what is left
     bankThrustVector(1.0f, horizontal, 1.0f, -10.0f, &forward, &right);
-    EXPECT_NEAR(0.0f, forward, 1e-2f);
+    EXPECT_NEAR(-brake, forward, 1e-5f);
+    EXPECT_NEAR(sqrtf(sq(horizontal) - sq(brake)), right, 1e-3f);
+
+    // a small brake leaves the bank nearly the whole budget, so it doesn't jump as the brake starts
+    bankThrustVector(1.0f, horizontal, -1.0f, -0.01f, &forward, &right);
+    EXPECT_NEAR(-0.01f, forward, 1e-5f);
+    EXPECT_NEAR(-horizontal, right, 1e-3f);
+
+    // a brake is no more than the budget, and then leaves no bank
+    bankThrustVector(2.0f, 0.5f, 1.0f, -10.0f, &forward, &right);
+    EXPECT_NEAR(-0.5f, forward, 1e-5f);
+    EXPECT_NEAR(0.0f, right, 1e-3f);
+
+    // a bank below the budget isn't cut by a brake that fits beside it
+    bankThrustVector(1.0f, horizontal, 0.5f, -10.0f, &forward, &right);
+    EXPECT_NEAR(1.0f, right, 1e-5f);
+    EXPECT_NEAR(-brake, forward, 1e-5f);
 }
 
 TEST(BankModeTest, SpeedStickIsASpeedInTheLowerHalfAndAForceInTheUpperHalf)
@@ -486,6 +512,24 @@ TEST(BankModeTest, ForwardDragReadsAsSpeedAndTheBottomOfTheStickBrakes)
     in.accX = -0.3f;        // drag of flying forwards
     computeN(&in, &state, &out, 300);
     EXPECT_NEAR(-30.0f, out.pitchDeg, 1.0f);
+}
+
+TEST(BankModeTest, TheBottomOfTheStickBrakesInAFullBank)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.armed = false;
+    in.roll = 1.0f;
+    in.accX = -0.6f;        // fast enough that the brake binds
+    computeN(&in, &state, &out, 300);
+    float forward;
+    float right;
+    targetThrust(&out, &forward, &right);
+    // the brake force, per g of Lift, of a 30 degree tilt back, and still most of the budget as bank
+    EXPECT_NEAR(-tanf(30.0f * DEG), forward, 1e-2f);
+    EXPECT_GT(out.rollDeg, 70.0f);
 }
 
 TEST(BankModeTest, ABankedTurnFeedsTheYawForwardFromTheBankTheCraftIsIn)
