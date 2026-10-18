@@ -190,7 +190,7 @@ Facts for putting it on this drone:
   - `bank_mid_speed` (x100 g of drag, default 50): lower it (e.g. 10) for the first flights.
   - `set debug_mode = BANK`. Set `blackbox_sample_rate` low enough for the 2 MB flash.
 - **Safety facts found in the code:**
-  - In BANK, motor power comes from the Lift stick: at the centre it is hover power, armed or not. The arming check reads only the throttle (Speed) stick (`core.c`, `calculateThrottleStatus()`), so arming with BANK on and Lift centred spins straight up to hover power. So arm, take off and land in ANGLE, and only use BANK in the air.
+  - In BANK, motor power comes from the Lift stick: at the centre it is hover power, armed or not. With BANK on, arming needs both the throttle (Speed) stick and the right stick (Lift) fully down (`core.c`, `updateArmingStatus()`; since 2026-10-18, not bench tested yet). Armed that way the motors still spin at the Lift floor (about 11 % collective), not idle. Until the bench test confirms it, keep arming, taking off and landing in ANGLE.
   - In BANK the throttle stick is Speed. Switch BANK on or off only with the throttle stick near the hover position: leaving BANK with the stick at the bottom gives zero throttle in ANGLE.
   - Airmode is on by default (not changed in this diff), so the PIDs keep stabilising at zero Lift.
   - The BANK hooks for throttle-low, auto-disarm, runaway takeoff and failsafe have never run in the simulator. Bench-test them with props off before flying.
@@ -266,7 +266,8 @@ Use a battery, with props off, and the radio bound.
 | Arm in ANGLE, throttle low, flick to BANK with the right stick centred | Motors rise to about hover power: Lift centre is 1 g |
 | In BANK, pull the right stick fully back | Motors drop to idle (0 g Lift) and keep stabilising (airmode is on) |
 | In BANK, move the throttle (Speed) stick | Motor outputs shift as the mode asks for forward tilt; the drone can't tilt on the bench, so watch the Motors tab or a log |
-| Disarm, then arm with BANK already on, the throttle stick at the bottom and the right stick centred | Arms, and motors go straight to hover power; this is why arming happens in ANGLE |
+| Disarm, then try to arm with BANK already on, the throttle stick at the bottom and the right stick centred | Does not arm: the arming flags show THROTTLE |
+| Then pull the right stick fully back and arm | Arms; motors at the Lift floor (about 11 % collective), not hover power |
 | Armed in BANK, switch the radio off | Failsafe drops BANK (it yields to failsafe) and runs the normal failsafe |
 
 The throttle-low, auto-disarm, runaway takeoff and failsafe "landed" hooks under BANK have never run in the simulator, so watch for any surprise disarm or any failure to disarm.

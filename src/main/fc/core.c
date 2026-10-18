@@ -382,7 +382,12 @@ if (crashFlipModeActive) {
         }
 #endif
 
-        if (calculateThrottleStatus() != THROTTLE_LOW) {
+        // under BANK the Lift stick (pitch) sets the motor power, so it must be at the bottom too
+        if (calculateThrottleStatus() != THROTTLE_LOW
+#ifdef USE_BANK_MODE
+            || (FLIGHT_MODE(BANK_MODE) && rcData[PITCH] >= rxConfig()->mincheck)
+#endif
+            ) {
             setArmingDisabled(ARMING_DISABLED_THROTTLE);
         } else {
             unsetArmingDisabled(ARMING_DISABLED_THROTTLE);
@@ -1059,7 +1064,7 @@ void processRxModes(timeUs_t currentTimeUs)
     bool canUseHorizonMode = true;
 
     // BANK levels like ANGLE. Failsafe, GPS rescue, alt hold and pos hold take priority (flags from the previous cycle).
-    // OPEN: interaction with HEADFREE and arming.
+    // OPEN: interaction with HEADFREE.
 #ifdef USE_BANK_MODE
     const bool bankModeRequested = IS_RC_MODE_ACTIVE(BOXBANK)
         && sensors(SENSOR_ACC)
