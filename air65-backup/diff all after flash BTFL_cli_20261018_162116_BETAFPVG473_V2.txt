@@ -1,0 +1,78 @@
+# 
+
+# version
+# Betaflight / STM32G474 (G474) 2026.12.0-alpha Oct 18 2026 / 05:03:10 (60d5750ad) MSP API: 1.49
+# config rev: 15d8c3f
+# board: manufacturer_id: BEFH, board_name: BETAFPVG473_V2
+
+# status
+MCU: STM32G474xx CLK=168MHz (PLLR-HSE), Vref=3.31V, Core temp=68degC
+STACK: 2048b (0x2001fff0)
+CONFIG: CONFIGURED (4109b / 8192b)
+
+DEVICES DETECTED: SPI=1, I2C=0 (0 errors)
+GYRO: (1) BMI270 enabled locked dma
+ACC: BMI270
+OSD: MSP (53 x 20)
+FLASH: JEDEC ID=0x00852018 16M
+
+System Uptime: 77 seconds, Current Time: 2026-10-18T05:19:29.093+00:00
+CPU:24%, cycle time: 309, GYRO rate: 3233, RX rate: 250, System rate: 10
+Voltage: 0.52V (0S battery - NOT PRESENT)
+Arming disable flags: THROTTLE CLI MSP
+
+# diff all
+
+# version
+# Betaflight / STM32G474 (G474) 2026.12.0-alpha Oct 18 2026 / 05:03:10 (60d5750ad) MSP API: 1.49
+# config rev: 15d8c3f
+
+# start the command batch
+batch start
+
+# reset configuration to default settings
+defaults nosave
+
+board_name BETAFPVG473_V2
+manufacturer_id BEFH
+mcu_id 002e00253235511135363938
+signature 
+
+# feature
+feature TELEMETRY
+feature OSD
+
+profile 0
+
+profile 1
+
+profile 2
+
+profile 3
+
+# restore original profile selection
+profile 0
+
+rateprofile 0
+
+rateprofile 1
+
+rateprofile 2
+
+rateprofile 3
+
+battery_profile 0
+
+battery_profile 1
+
+battery_profile 2
+
+# restore original rateprofile selection
+rateprofile 0
+
+# restore original battery_profile selection
+battery_profile 0
+
+# save configuration
+save
+# 
