@@ -141,6 +141,22 @@ Decisions made while flying it in the simulator, now in `flight/bank_mode.c`:
 
 Known open points: the scripted sortie flies 0.5 Speed, which is 19.5 m/s since `bank_mid_speed` (it was about 10 m/s), and one row fails there: `turn_ball_g` -0.211 (it averages the raw body Y accelerometer, and at 26 degrees of pitch in the 52 degree turn the forward drag reads about -0.27 on that axis in a coordinated turn; the firmware's own ball levels it out and reads about 0). `headreturn_nose_offset_deg` passes since the hard-bank fixes (2.9, was 6.6, band 5). Flown at 0.27 Speed (9 m/s, the old cruise), every row passes but `headcheck_track_change_deg` -11.1 (band 10, -10.1 before). The owner decides whether the sortie's Speed or the rows change. The head check rotates the tilt by the commanded offset while the nose lags it at 360 deg/s, so the track moves about 10 degrees on a full head check; `core.c` resets I-term when the throttle stick is low and airmode has not latched, and under BANK the throttle stick is the speed command (fixed in the tuning round of 2026-10-17: `bankModeIsThrottleLow()`); the speed has no authority during a full bank (lowest priority), so the turn speed depends on the entry.
 
+## Real hardware (2026-10-18)
+
+The first test drone is the owner's BetaFPV Air65 R: board `BETAFPVG473_V2` (STM32G473, 512 KB flash), BMI270, a 1S ducted 65 mm whoop, with ELRS at 250 Hz. [air65-backup/reference.md](air65-backup/reference.md) has the drone's facts, the stock backup and how to restore it, the build and flash steps, the bench test and the log fields. Not yet flown in BANK.
+
+Found while preparing it, open for the owner:
+- **Flash gate**: `USE_BANK_MODE` needs `TARGET_FLASH_SIZE > 512` (`common_post.h`), which leaves the G473 out, so the drone is built with `OPTIONS="USE_BANK_MODE"`. With it the build uses 79 % of flash and 68 % of RAM. Whether the gate should take in 512 KB parts is a question for upstreaming.
+- **Arming in BANK**: the arming check reads only the throttle (Speed) stick (`core.c`, `calculateThrottleStatus()`), while the collective comes from Lift. So arming with BANK on and Lift centred spins straight up to hover power: the simulator's take-off, but a surprise on the bench. For now the procedure is to arm, take off and land in ANGLE. This is the "interaction with arming" left open in `core.c`.
+- **Switching between BANK and ANGLE**: the throttle stick changes meaning, with nothing to bridge it. Leaving BANK with Speed at the bottom gives ANGLE zero throttle and the craft drops. Entering BANK at the hover throttle asks for a Speed near `bank_mid_speed`. For now the procedure is to switch only with the throttle stick near the hover position.
+- **Hooks never flown**: the throttle-low hooks in `core.c` and `failsafe.c` (I-term reset, PIDs at min throttle, auto-disarm, runaway takeoff, failsafe's landed timer) are not in the simulator, so the bench test and the first flights are their first run.
+- **Plant differences**:
+  - `bank_thrust_to_weight` is measured from a hover in ANGLE, as the hover throttle (reference.md has the method).
+  - 1S sags much more than the simulator's pack (see "Battery sag" below).
+  - The ducts change the rotor drag that the speed estimate and the ball are built on, including the side to front ratio behind the look-turn error. `bank_mid_speed` in g of drag will be a much lower real speed.
+  - The accelerometer sees whoop vibration.
+- **Logs**: `debug_mode = BANK` to blackbox on 2 MB of onboard flash. `bank-log.js` and its `--replay` read only the simulator's CSV, so hardware logs need a blackbox CSV converter (not written yet) before they can be read and replayed the same way.
+
 ## To look at
 
 Noted by the owner on 2026-10-15 for a later pass. Each works in the simulator today, but is a first cut.
