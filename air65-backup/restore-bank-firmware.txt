@@ -177,5 +177,8 @@ set blackbox_sample_rate = 1/16
 set bank_mid_speed = 10
 set runaway_takeoff_prevention = OFF
 
+# end the command batch
+batch end
+
 # save configuration
 save
