@@ -52,6 +52,7 @@ typedef struct bankOutputs_s {
     float pitchDeg;             // positive nose-down
     float yawRateDps;           // positive counter-clockwise
     float collective;           // 0..1
+    bool throttleLow;           // Lift stick at the bottom, or no collective
 } bankOutputs_t;
 
 typedef struct bankState_s {

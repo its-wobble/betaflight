@@ -132,14 +132,20 @@ TEST(BankModeTest, SticksHaveADeadbandAndStillReachFullDeflection)
     EXPECT_NEAR(0.5f, bankShapeStick(0.525f), 1e-5f);
 }
 
-TEST(BankModeTest, LiftIsZeroAtTheBottomOneAtTheCentreAndAllTheThrustAtTheTop)
+TEST(BankModeTest, LiftIsALittleAtTheBottomOneAtTheCentreAndAllTheThrustAtTheTop)
 {
-    EXPECT_FLOAT_EQ(0.0f, bankLiftFromStick(0.0f, 5.7f));
+    // a floor at the bottom, enough to steer, well short of a hover
+    EXPECT_GT(bankLiftFromStick(0.0f, 5.7f), 0.0f);
+    EXPECT_LT(bankLiftFromStick(0.0f, 5.7f), 0.5f);
     EXPECT_FLOAT_EQ(1.0f, bankLiftFromStick(0.5f, 5.7f));
     EXPECT_FLOAT_EQ(5.7f, bankLiftFromStick(1.0f, 5.7f));
-    // both halves start at 1 g per half stick
+    // both halves start at the same slope
     EXPECT_NEAR(bankLiftFromStick(0.5f, 5.7f) - bankLiftFromStick(0.49f, 5.7f), bankLiftFromStick(0.51f, 5.7f) - bankLiftFromStick(0.5f, 5.7f), 1e-4f);
     EXPECT_FLOAT_EQ(1.5f, bankLiftFromStick(1.0f, 1.5f));
+    for (float s = 0.0f; s < 1.0f; s += 0.01f) {
+        EXPECT_LT(bankLiftFromStick(s, 5.7f), bankLiftFromStick(s + 0.01f, 5.7f));
+        EXPECT_LT(bankLiftFromStick(s, 1.9f), bankLiftFromStick(s + 0.01f, 1.9f));
+    }
 }
 
 TEST(BankModeTest, CollectiveIsTheInverseOfTheThrustCurve)
@@ -516,9 +522,11 @@ TEST(BankModeTest, LiftAtTheBottomTiltsNoFurtherThanHalfAG)
     in.roll = 0.3f;
     in.lift = 0.0f;
     computeN(&in, &state, &bottom, 10);
-    EXPECT_FLOAT_EQ(0.0f, bottom.collective);
     state = {};
-    in.lift = 0.5f - 0.5f * (0.05f + 0.5f * 0.95f);    // half a g after the deadband
+    // the stick for half a g, after the deadband
+    const float floor = bankLiftFromStick(0.0f, thrustToWeight());
+    const float liftStick = 0.5f * (0.5f - floor) / (1.0f - floor);
+    in.lift = 0.5f - 0.5f * (0.05f + (1.0f - 2.0f * liftStick) * 0.95f);
     computeN(&in, &state, &quarter, 10);
     EXPECT_NEAR(quarter.pitchDeg, bottom.pitchDeg, 0.5f);
     EXPECT_NEAR(quarter.rollDeg, bottom.rollDeg, 0.5f);
@@ -619,16 +627,24 @@ TEST(BankModeTest, ALateralAccelerometerBiasDoesNotYawTheHover)
     EXPECT_LT(out.yawRateDps, -5.0f);
 }
 
-TEST(BankModeTest, NothingTurnsWithLiftAtTheBottom)
+TEST(BankModeTest, LiftAtTheBottomGivesTheFloorButNothingTurns)
 {
     pgResetAll();
     bankState_t state = {};
     bankOutputs_t out = {};
     bankInputs_t in = centredInputs();
+    in.armed = false;
     in.lift = 0.0f;
+    computeN(&in, &state, &out, 10);
+    EXPECT_NEAR(bankLiftFromStick(0.0f, thrustToWeight()), bankThrustFromCollective(out.collective, thrustToWeight()), 1e-4f);
+
+    // moving, banked and slipping: the floor's thrust still steers, but the yaw stays off
+    in.accX = -0.3f;
     in.accY = -0.3f;
+    in.roll = 1.0f;
     in.measuredRollDeg = 30.0f;
     computeN(&in, &state, &out, 100);
+    EXPECT_GT(out.collective, 0.0f);
     EXPECT_FLOAT_EQ(0.0f, out.yawRateDps);
 }
 
@@ -712,14 +728,18 @@ TEST(BankModeTest, YawStickBanksAndRollStickTurnsTheNose)
     EXPECT_LT(bankModeGetYawRate(), 0.0f);
 }
 
-TEST(BankModeTest, ThrottleIsLowOnlyWithNoCollective)
+TEST(BankModeTest, ThrottleIsLowWithLiftAtTheBottom)
 {
     setUpUpdate();
     ENABLE_FLIGHT_MODE(BANK_MODE);
     bankModeUpdate(1000);
     EXPECT_FALSE(bankModeIsThrottleLow());
-    testDeflection[FD_PITCH] = -1.0f;     // Lift at the bottom
+    testDeflection[FD_PITCH] = -0.9f;     // near the bottom
     bankModeUpdate(11000);
+    EXPECT_FALSE(bankModeIsThrottleLow());
+    testDeflection[FD_PITCH] = -1.0f;     // at the bottom, where the floor still gives thrust
+    bankModeUpdate(21000);
+    EXPECT_GT(bankModeGetCollective(), 0.0f);
     EXPECT_TRUE(bankModeIsThrottleLow());
 }
 

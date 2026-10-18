@@ -60,7 +60,7 @@
  *   throttle  Speed: the lower half is a speed target, 0 to bank_mid_speed, with a stop band at the bottom; the upper
  *             half a forward force up to what the thrust allows. Below min_check a small reverse, once the stick has
  *             been raised since arming.
- *   pitch     Lift: 0 g at the bottom, 1 g at the centre, all the thrust at the top
+ *   pitch     Lift: BANK_LIFT_FLOOR at the bottom, 1 g at the centre, all the thrust at the top
  *   yaw       Bank: bank angle, the turn follows from it
  *   roll      head check: nose offset from the direction of travel, springs back at the centre
  *
@@ -92,6 +92,7 @@
 #define BANK_THRUST_EXPONENT    1.5f    // thrust ~ collective ^ 1.5
 #define BANK_TILT_THRUST_SHARE  0.75f   // share of the spare thrust the tilt may use
 #define BANK_MIN_LIFT           0.5f    // g, the lowest lift the tilt is computed for
+#define BANK_LIFT_FLOOR         0.2f    // g, Lift at the bottom of the stick: enough thrust to steer while dropping
 #define BANK_MAX_BRAKE_DEG      30.0f
 #define BANK_BRAKE_STICK        (1.0f / 3.0f)   // below this Speed stick a craft that is too fast is braked
 #define BANK_REVERSE_STICK      0.05f   // the reverse zone carries the Speed stick this far below 0
@@ -135,20 +136,22 @@ STATIC_UNIT_TESTED float bankShapeStick(float deflection)
     return d < 0.0f ? -shaped : shaped;
 }
 
-// Lift in g for the Lift stick (0..1): linear from 0 to 1 g below the centre, then 1 + x + (T/W - 2) * x^3 up to T/W,
-// so both halves start at 1 g per half stick and the centre isn't touchy.
+// Lift in g for the Lift stick (0..1): linear from BANK_LIFT_FLOOR to 1 g below the centre, then
+// 1 + (1 - floor) * x + (T/W - 2 + floor) * x^3 up to T/W, so both halves start at the same slope and the centre isn't
+// touchy.
 STATIC_UNIT_TESTED float bankLiftFromStick(float stick, float thrustToWeight)
 {
     const float s = constrainf(stick, 0.0f, 1.0f);
+    const float slope = 1.0f - BANK_LIFT_FLOOR;
     if (s <= 0.5f) {
-        return 2.0f * s;
+        return BANK_LIFT_FLOOR + 2.0f * s * slope;
     }
     const float x = 2.0f * s - 1.0f;
     const float tw = fmaxf(thrustToWeight, 1.0f);
-    if (tw <= 2.0f) {
+    if (tw <= 2.0f - BANK_LIFT_FLOOR) {
         return 1.0f + x * (tw - 1.0f);     // no room for the curve
     }
-    return 1.0f + x + (tw - 2.0f) * x * x * x;
+    return 1.0f + slope * x + (tw - 1.0f - slope) * x * x * x;
 }
 
 // thrust (g) = thrustToWeight * collective ^ BANK_THRUST_EXPONENT
@@ -406,12 +409,13 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     const float liftVector = sqrtf(sq(forward) + sq(right) + sq(liftForTilt));
 
     // the turn rate is fed forward from the bank the craft is in, so a reversal doesn't turn the nose before the craft
-    // has rolled through; nothing turns with no lift (on the ground or falling). The ball fades out with the speed like
-    // the feedforward: with no track to follow an accelerometer bias would yaw the craft for good.
+    // has rolled through; nothing turns with the Lift stick at the bottom (on the ground, or dropping, where the sink
+    // across the tilted props reads as slip). The ball fades out with the speed like the feedforward: with no track to
+    // follow an accelerometer bias would yaw the craft for good.
     const float ballYaw = ball * constrainf(fabsf(speed) / BANK_TURN_MIN_SPEED, 0.0f, 1.0f);
     float turnRateDps = 0.0f;
     float ballRateDps = 0.0f;
-    if (lift > 0.0f) {
+    if (liftStick > 0.0f) {
         const float maxBankTan = tanf(DEGREES_TO_RADIANS(BANK_TURN_MAX_BANK_DEG));
         const float heldBankTan = constrainf(heldRight / fmaxf(tiltCos, 1e-3f), -maxBankTan, maxBankTan);
         turnRateDps = bankTurnFeedforward(heldBankTan, speed);
@@ -420,7 +424,7 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     const float yawRateDps = turnRateDps + ballRateDps + state->ballIntegral + RADIANS_TO_DEGREES(offsetStep / dt);
     // the integral takes out what the feedforward's fixed turn gain misses, so the nose holds the track; only in a
     // turn, and not deeper into the yaw limit
-    if (bankStick == 0.0f || lift <= 0.0f) {
+    if (bankStick == 0.0f || liftStick <= 0.0f) {
         state->ballIntegral = 0.0f;
     } else if (fabsf(yawRateDps) < BANK_YAW_MAX_RATE || ballYaw * yawRateDps < 0.0f) {
         state->ballIntegral += BANK_BALL_KI * ballYaw * dt;
@@ -430,6 +434,7 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     out->rollDeg = RADIANS_TO_DEGREES(atan2f(right, liftForTilt));
     out->yawRateDps = constrainf(yawRateDps, -BANK_YAW_MAX_RATE, BANK_YAW_MAX_RATE);
     out->collective = collective;
+    out->throttleLow = liftStick <= 0.0f || collective <= 0.0f;
 
     DEBUG_SET(DEBUG_BANK, 0, lrintf(speed * 1000.0f));                                   //!< Speed Estimate [unit:0.001g]
     DEBUG_SET(DEBUG_BANK, 1, lrintf(bankTargetSpeed(speedStick, midSpeed) * 1000.0f));   //!< Target Speed [unit:0.001g]
@@ -506,10 +511,11 @@ float bankModeGetThrustToWeight(void)
     return bankModeConfig()->thrustToWeight / 100.0f;
 }
 
-// The bottom of the throttle stick is the Speed stick's stop, not idle, so the throttle is low only with no collective.
+// The bottom of the throttle stick is the Speed stick's stop, not idle, so the throttle is low with the Lift stick at
+// the bottom (its floor still gives thrust) or no collective.
 bool bankModeIsThrottleLow(void)
 {
-    return bankOutputs.collective <= 0.0f;
+    return bankOutputs.throttleLow;
 }
 
 #endif // USE_BANK_MODE
