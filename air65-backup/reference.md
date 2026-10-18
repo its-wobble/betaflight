@@ -165,8 +165,8 @@ The settings run the MCU from its internal oscillator (`system_hse_mhz = 0`), wh
 The owner develops a new Betaflight flight mode, **bank**, in a fork (its-wobble/betaflight, branch `banked-mode-init`; repo checkout `/workspaces/betaflight` in the dev container). Its design and terms are in that repo's `project_plan.md`. In bank mode the sticks become controls in the world frame:
 - the throttle stick is **Speed**: the lower half is a speed, with the bottom braking to a stop; the upper half is a forward force
 - the pitch stick is **Lift**, a vertical force: bottom 0 g, centre 1 g, top full thrust
-- the roll stick is **Bank**
-- the yaw stick is the **head check**, which turns the nose without changing the track
+- the yaw stick is **Bank**
+- the roll stick is the **head check**, which turns the nose without changing the track
 
 It has been flown only in a simulator (WebFPVSimulator, a 5-inch model at 1.62 g) until now. The open points for real hardware are in `project_plan.md`, section "Real hardware".
 
@@ -220,9 +220,12 @@ Facts for putting it on this drone:
    set debug_mode = BANK
    set blackbox_sample_rate = 1/16
    set bank_mid_speed = 10
+   set runaway_takeoff_prevention = OFF
    save
    ```
    Add `set bank_thrust_to_weight = <measured>` once it has been measured (next section).
+
+   **Reminder: runaway takeoff.** Turn it off (above) until the firmware is fixed. In BANK it can disarm the drone in mid-air. The check switches itself off once the throttle *stick* has been above 20 % (with a stick deflected) for 0.5 s, or above 40 %. In BANK that stick is Speed, not the motor power (`core.c`, `calculateThrottlePercentAbs()`). After a launch in BANK, with Speed in the lower half, the check stays on all flight. It then disarms whenever a PID sum passes 60 % for 75 ms while the craft is rotating: a hard Bank entry, a hard brake or a touch on a wall. Under BANK, airmode's start latch (`airmode_start_throttle_percent = 25`) reads the same stick. The fix is to use the collective as the throttle percent under BANK in both places (open in `project_plan.md`, "Real hardware"). Once the fix is in, set it back `ON`.
 3. **Check:**
    - `version` shows the fork's commit, not `e92c10887`.
    - `status` still shows `BMI270` and `168MHz (PLLR-HSI)`.

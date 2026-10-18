@@ -60,8 +60,8 @@
  *   throttle  Speed: the lower half is a speed target, 0 to bank_mid_speed; the upper half a forward force up to
  *             what the thrust allows. No reverse.
  *   pitch     Lift: 0 g at the bottom, 1 g at the centre, all the thrust at the top
- *   roll      Bank: bank angle, the turn follows from it
- *   yaw       head check: nose offset from the direction of travel, springs back at the centre
+ *   yaw       Bank: bank angle, the turn follows from it
+ *   roll      head check: nose offset from the direction of travel, springs back at the centre
  *
  * The sticks set a thrust vector in the travel frame (x forward along the track, r to the right, z up):
  *   z = Lift,  r = Lift * tan(bank),  x = the forward force for the Speed stick
@@ -419,9 +419,10 @@ void bankModeUpdate(timeUs_t currentTimeUs)
     bankState.lastUpdateUs = currentTimeUs;
 
     const bankInputs_t inputs = {
-        .roll = getRcDeflection(FD_ROLL),
+        // Bank on the yaw stick, the head check on the roll stick; the yaw deflection is positive to the left
+        .roll = -getRcDeflection(FD_YAW),
         .speed = (rcCommand[THROTTLE] - PWM_RANGE_MIN) / (float)PWM_RANGE,
-        .yaw = getRcDeflection(FD_YAW),
+        .yaw = -getRcDeflection(FD_ROLL),
         .lift = 0.5f * (getRcDeflection(FD_PITCH) + 1.0f),
         .armed = ARMING_FLAG(ARMED),
         .accX = acc.accADC.x * acc.dev.acc_1G_rec,

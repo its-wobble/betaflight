@@ -495,19 +495,39 @@ TEST(BankModeTest, EngagedWithTheThrottleLowNoTiltUntilTheBankStickIsCentred)
 {
     setUpUpdate();
     ENABLE_FLIGHT_MODE(BANK_MODE);
-    testDeflection[FD_ROLL] = 1.0f;
+    testDeflection[FD_YAW] = -1.0f;     // yaw stick right = bank right
     timeUs_t now = 1000;
     for (int i = 0; i < 10; i++, now += 10000) {
         bankModeUpdate(now);
     }
     EXPECT_FLOAT_EQ(0.0f, bankModeGetAngleTarget(FD_ROLL));
 
-    testDeflection[FD_ROLL] = 0.0f;
+    testDeflection[FD_YAW] = 0.0f;
     bankModeUpdate(now);
     now += 10000;
-    testDeflection[FD_ROLL] = 1.0f;
+    testDeflection[FD_YAW] = -1.0f;
     bankModeUpdate(now);
     EXPECT_GT(bankModeGetAngleTarget(FD_ROLL), 0.0f);
+}
+
+TEST(BankModeTest, YawStickBanksAndRollStickTurnsTheNose)
+{
+    // each stick to the right: Bank right, or the nose to the right (clockwise)
+    setUpUpdate();
+    ENABLE_FLIGHT_MODE(BANK_MODE);
+    bankModeUpdate(1000);
+    testDeflection[FD_YAW] = -1.0f;
+    bankModeUpdate(11000);
+    EXPECT_GT(bankModeGetAngleTarget(FD_ROLL), 0.0f);
+
+    // with the Speed stick at the bottom the head check alone gives no tilt
+    setUpUpdate();
+    ENABLE_FLIGHT_MODE(BANK_MODE);
+    bankModeUpdate(1000);
+    testDeflection[FD_ROLL] = 1.0f;
+    bankModeUpdate(11000);
+    EXPECT_FLOAT_EQ(0.0f, bankModeGetAngleTarget(FD_ROLL));
+    EXPECT_LT(bankModeGetYawRate(), 0.0f);
 }
 
 TEST(BankModeTest, ThrottleIsLowOnlyWithNoCollective)
@@ -532,7 +552,7 @@ TEST(BankModeTest, UpdateMirrorsTheModeFlagAndClearsWhenInactive)
     EXPECT_TRUE(bankModeIsActive());
     EXPECT_NEAR(hoverCollective(), bankModeGetCollective(), 1e-5f);
 
-    testDeflection[FD_ROLL] = 1.0f;
+    testDeflection[FD_YAW] = -1.0f;     // yaw stick right = bank right
     bankModeUpdate(12000);
     EXPECT_GT(bankModeGetAngleTarget(FD_ROLL), 0.0f);
 
