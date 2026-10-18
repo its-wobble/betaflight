@@ -814,6 +814,17 @@ static throttleStatus_e calculateMotorThrottleStatus(void)
     return calculateThrottleStatus();
 }
 
+// The motors' throttle in percent: under BANK the collective, not the Speed stick
+static uint8_t calculateMotorThrottlePercent(void)
+{
+#ifdef USE_BANK_MODE
+    if (FLIGHT_MODE(BANK_MODE)) {
+        return lrintf(bankModeGetCollective() * 100.0f);
+    }
+#endif
+    return calculateThrottlePercentAbs();
+}
+
 static bool throttleRaised = false;
 bool wasThrottleRaised(void)
 {
@@ -844,7 +855,7 @@ bool processRx(timeUs_t currentTimeUs)
     }
 
     const bool throttleActive = calculateMotorThrottleStatus() != THROTTLE_LOW;
-    const uint8_t throttlePercent = calculateThrottlePercentAbs();
+    const uint8_t throttlePercent = calculateMotorThrottlePercent();
     const bool launchControlActive = isLaunchControlActive();
     static bool isAirmodeActive;
 

@@ -74,7 +74,8 @@
  *
  * Speed is the levelled accelerometer drag normalised by sqrt(thrust), in g of drag, so it needs no m/s calibration.
  * Yaw feeds forward the coordinated turn rate g * tan(bank) / v and keeps the ball (the lateral drag in the travel
- * frame) centred. A fast thrust trim corrects the modelled thrust from the measured vertical force.
+ * frame) centred, with an integral in turns for what the feedforward misses. A fast thrust trim corrects the modelled
+ * thrust from the measured vertical force.
  *
  * Limitations:
  *   - the ball and the speed only see rotor drag: little signal at low speed, and accelerometer bias reads as speed
@@ -100,12 +101,14 @@
 #define BANK_DRAG_FILTER_HZ     2.0f
 #define BANK_DRAG_MIN_THRUST    0.25f   // g
 #define BANK_LEVEL_MIN_COS      0.087f  // cos(85 deg), the angle loop's limit
-#define BANK_YAW_MAX_RATE       360.0f  // deg/s, also the nose offset's slew rate
+#define BANK_YAW_MAX_RATE       720.0f  // deg/s; in a steep bank most of it is pitch rate
+#define BANK_NOSE_SLEW_RATE     360.0f  // deg/s, how fast the nose offset (head check, look) moves
 #define BANK_TURN_GAIN          19.0f   // deg/s * g of drag, g in the turn rate g * tan(bank) / v
 #define BANK_TURN_MIN_SPEED     0.1f    // g of drag, the turn feedforward fades out below this
 #define BANK_TURN_RATE_SHARE    0.6f    // share of the yaw limit the feedforward may use, the rest is the ball's
 #define BANK_TURN_MAX_BANK_DEG  85.0f
 #define BANK_BALL_KP            600.0f  // deg/s per g
+#define BANK_BALL_KI            600.0f  // deg/s per g per s
 #define BANK_TRIM_MIN_TILT_COS  0.25f   // no trim measurement past 75 deg of tilt
 #define BANK_TRIM_MIN_LIFT      0.3f    // g, no trim measurement below this modelled vertical force
 #define BANK_TRIM_FILTER_HZ     3.0f
@@ -325,14 +328,18 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     float levelX;
     float levelY;
     bankLevelDrag(in->accX * dragScale, in->accY * dragScale, pitch, roll, &levelX, &levelY);
+    // filtered in the travel frame, so the nose turning away from the track (head check, look) isn't read as slip
+    // through the filter's lag
+    float sampleForward = levelX;
+    float sampleRight = -levelY;
+    bankRotate(&sampleForward, &sampleRight, -state->noseOffset);
     const float dragGain = restart ? 1.0f : pt1FilterGain(BANK_DRAG_FILTER_HZ, dt);
-    state->dragX += dragGain * (levelX - state->dragX);
-    state->dragY += dragGain * (levelY - state->dragY);
+    state->dragForward += dragGain * (sampleForward - state->dragForward);
+    state->dragRight += dragGain * (sampleRight - state->dragRight);
 
     // speed and ball in the travel frame
-    float dragForward = state->dragX;
-    float dragRight = -state->dragY;
-    bankRotate(&dragForward, &dragRight, -state->noseOffset);
+    const float dragForward = state->dragForward;
+    const float dragRight = state->dragRight;
     const float direction = bankTravelDirection(dragForward);
     const float speed = direction * fapplyDeadband(sqrtf(sq(dragForward) + sq(dragRight)), BANK_SPEED_DEADBAND);
     const float ball = direction * dragRight;
@@ -388,10 +395,10 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
         : 0.0f;
     state->collective = collective;
 
-    // nose offset: the look into the turn plus the head check, slewed at the yaw limit
+    // nose offset: the look into the turn plus the head check, slewed
     const float offsetTarget = bankLookIntoTurnOffset(bankStick, speedStick) * (config->lookTurn / 100.0f)
         + headStick * DEGREES_TO_RADIANS(config->headCheckRange);
-    const float maxStep = DEGREES_TO_RADIANS(BANK_YAW_MAX_RATE) * dt;
+    const float maxStep = DEGREES_TO_RADIANS(BANK_NOSE_SLEW_RATE) * dt;
     const float offsetStep = constrainf(offsetTarget - state->noseOffset, -maxStep, maxStep);
     state->noseOffset += offsetStep;
 
@@ -399,16 +406,25 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     const float liftVector = sqrtf(sq(forward) + sq(right) + sq(liftForTilt));
 
     // the turn rate is fed forward from the bank the craft is in, so a reversal doesn't turn the nose before the craft
-    // has rolled through; nothing turns with no lift (on the ground or falling)
+    // has rolled through; nothing turns with no lift (on the ground or falling). The ball fades out with the speed like
+    // the feedforward: with no track to follow an accelerometer bias would yaw the craft for good.
+    const float ballYaw = ball * constrainf(fabsf(speed) / BANK_TURN_MIN_SPEED, 0.0f, 1.0f);
     float turnRateDps = 0.0f;
     float ballRateDps = 0.0f;
     if (lift > 0.0f) {
         const float maxBankTan = tanf(DEGREES_TO_RADIANS(BANK_TURN_MAX_BANK_DEG));
         const float heldBankTan = constrainf(heldRight / fmaxf(tiltCos, 1e-3f), -maxBankTan, maxBankTan);
         turnRateDps = bankTurnFeedforward(heldBankTan, speed);
-        ballRateDps = BANK_BALL_KP * ball;
+        ballRateDps = BANK_BALL_KP * ballYaw;
     }
-    const float yawRateDps = turnRateDps + ballRateDps + RADIANS_TO_DEGREES(offsetStep / dt);
+    const float yawRateDps = turnRateDps + ballRateDps + state->ballIntegral + RADIANS_TO_DEGREES(offsetStep / dt);
+    // the integral takes out what the feedforward's fixed turn gain misses, so the nose holds the track; only in a
+    // turn, and not deeper into the yaw limit
+    if (bankStick == 0.0f || lift <= 0.0f) {
+        state->ballIntegral = 0.0f;
+    } else if (fabsf(yawRateDps) < BANK_YAW_MAX_RATE || ballYaw * yawRateDps < 0.0f) {
+        state->ballIntegral += BANK_BALL_KI * ballYaw * dt;
+    }
 
     out->pitchDeg = RADIANS_TO_DEGREES(asinf(forward / liftVector));
     out->rollDeg = RADIANS_TO_DEGREES(atan2f(right, liftForTilt));

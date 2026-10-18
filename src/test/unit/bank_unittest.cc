@@ -332,7 +332,7 @@ TEST(BankModeTest, TurnFeedforwardIsTheCoordinatedRateWithinItsShare)
     EXPECT_GT(bankTurnFeedforward(1.0f, -0.5f), 0.0f);
     // no speed, no feedforward, and never more than 60 % of the yaw limit
     EXPECT_FLOAT_EQ(0.0f, bankTurnFeedforward(1.0f, 0.0f));
-    EXPECT_FLOAT_EQ(-0.6f * 360.0f, bankTurnFeedforward(11.0f, 0.1f));
+    EXPECT_FLOAT_EQ(-0.6f * 720.0f, bankTurnFeedforward(11.0f, 0.1f));
 }
 
 TEST(BankModeTest, ThrustTrimTakesOffExcessAndAddsMissingThrustOnlyBelowOneG)
@@ -470,7 +470,7 @@ TEST(BankModeTest, TheHeadCheckTurnsTheNoseButNotTheThrustInTheWorld)
     EXPECT_NEAR(plainOut.collective, lookedOut.collective, 1e-5f);
 }
 
-TEST(BankModeTest, TheHeadCheckSlewsAtTheYawLimitAndYawsWithIt)
+TEST(BankModeTest, TheHeadCheckSlewsAtItsRateAndYawsWithIt)
 {
     pgResetAll();
     bankState_t state = {};
@@ -480,6 +480,28 @@ TEST(BankModeTest, TheHeadCheckSlewsAtTheYawLimitAndYawsWithIt)
     bankCompute(bankModeConfig(), &in, &state, &out);
     EXPECT_NEAR(3.6f * DEG, state.noseOffset, 1e-5f);
     EXPECT_NEAR(360.0f, out.yawRateDps, 1e-2f);
+}
+
+TEST(BankModeTest, TheNoseTurningAwayFromTheTrackIsNotReadAsSlip)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.speed = 0.5f;
+    in.accX = -0.3f;
+    computeN(&in, &state, &out, 300);
+    // a full head check with the nose following it: the drag stays put in the world and turns in the nose frame
+    in.yaw = 1.0f;
+    for (int i = 0; i < 20; i++) {
+        float forward = -0.3f;
+        float right = 0.0f;
+        bankRotate(&forward, &right, state.noseOffset);
+        in.accX = forward;
+        in.accY = -right;
+        bankCompute(bankModeConfig(), &in, &state, &out);
+        EXPECT_NEAR(360.0f, out.yawRateDps, 1.0f);
+    }
 }
 
 TEST(BankModeTest, LiftAtTheBottomTiltsNoFurtherThanHalfAG)
@@ -547,6 +569,54 @@ TEST(BankModeTest, ABankedTurnFeedsTheYawForwardFromTheBankTheCraftIsIn)
     in.measuredRollDeg = 45.0f;
     computeN(&in, &state, &out, 1);
     EXPECT_LT(out.yawRateDps, levelYaw - 30.0f);
+}
+
+TEST(BankModeTest, TheBallIntegratesInATurnButNotPastTheYawLimit)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.armed = false;
+    in.speed = 0.5f;
+    in.roll = 0.5f;
+    in.accX = -0.3f;
+    in.accY = -0.05f;   // drag to the right: the track is left of the nose
+    computeN(&in, &state, &out, 100);   // the drag filter settles
+    const float yawBefore = out.yawRateDps;
+    computeN(&in, &state, &out, 100);
+    EXPECT_GT(state.ballIntegral, 5.0f);
+    EXPECT_GT(out.yawRateDps, yawBefore + 5.0f);
+
+    // no turn asked for: the P term alone centres the ball
+    in.roll = 0.0f;
+    computeN(&in, &state, &out, 1);
+    EXPECT_FLOAT_EQ(0.0f, state.ballIntegral);
+
+    // with the yaw at its limit the integral doesn't grow
+    in.roll = 0.5f;
+    in.accY = -2.0f;
+    computeN(&in, &state, &out, 100);
+    EXPECT_FLOAT_EQ(720.0f, out.yawRateDps);
+    const float saturatedIntegral = state.ballIntegral;
+    computeN(&in, &state, &out, 100);
+    EXPECT_FLOAT_EQ(saturatedIntegral, state.ballIntegral);
+}
+
+TEST(BankModeTest, ALateralAccelerometerBiasDoesNotYawTheHover)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.accY = 0.02f;
+    computeN(&in, &state, &out, 500);
+    EXPECT_NEAR(0.0f, out.yawRateDps, 1e-3f);
+
+    // moving, the same lateral drag is a slip and the ball yaws towards it
+    in.accX = -0.3f;
+    computeN(&in, &state, &out, 500);
+    EXPECT_LT(out.yawRateDps, -5.0f);
 }
 
 TEST(BankModeTest, NothingTurnsWithLiftAtTheBottom)

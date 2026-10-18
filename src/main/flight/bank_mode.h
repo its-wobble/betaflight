@@ -56,12 +56,13 @@ typedef struct bankOutputs_s {
 
 typedef struct bankState_s {
     float noseOffset;           // nose from the direction of travel, rad, positive counter-clockwise
-    float dragX;                // levelled drag at 1 g of thrust, filtered, g, along the nose's heading
-    float dragY;                // and to its left
+    float dragForward;          // levelled drag at 1 g of thrust, filtered, g, along the direction of travel
+    float dragRight;            // and to its right
     float collective;           // previous update's collective
     float thrustTrim;           // factor on the modelled thrust, 1 = as bank_thrust_to_weight says
     float trimModelVertical;    // modelled vertical force, lagged like the motors, g
     float trimInflow;           // inflow through the props the trim was measured at, g of drag
+    float ballIntegral;         // yaw rate the ball has integrated in the turn, deg/s
     bool tiltLocked;            // engaged with the throttle low, no tilt until the sticks are centred
     bool reverseReady;          // the Speed stick has left the reverse zone since arming
     timeUs_t lastUpdateUs;

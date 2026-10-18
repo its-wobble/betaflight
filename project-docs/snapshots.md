@@ -4,6 +4,14 @@ Revert points and parked experiments, newest first. Each one is a folder under `
 
 "Go back" or "revert" from the owner means the README commands of the snapshot they name. Nothing in the snapshots is committed, because the owner reviews before committing.
 
+## 2026-10-18: tuning round 2 harness (tools, not a revert point)
+
+Folder: `.bank-snapshots/2026-10-18-tuning-round-2/`. Write-up: project_plan.md, "Tuning round 2 (2026-10-18)".
+
+- **Revert:** the round started clean at 49e73edd2, so `git checkout` of the four changed files goes back; nothing in the folder is needed for that.
+- **In the folder:** the rewrite's scorecard brought up to date (swapped sticks, level variants, brake-in-bank climbing and sinking, whoop65, look turn 0/100, whole-flight ensembles), the base and final `sim-bank.wasm`, four owner logs of 2026-10-18, and the loop log.
+- **Why keep it:** start the next tuning pass from this scorecard rather than rebuilding one. It reads the older logs from the pre-rewrite snapshot's `logs/`.
+
 ## 2026-10-18: no thrust trim + fixed inflow thrust curve (parked)
 
 Folder: `.bank-snapshots/2026-10-18-inflow-curve/`. Write-up: project_plan.md, "No thrust trim (2026-10-18, tried and parked)".
