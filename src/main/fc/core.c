@@ -1063,7 +1063,7 @@ void processRxModes(timeUs_t currentTimeUs)
 
     bool canUseHorizonMode = true;
 
-    // BANK levels like ANGLE. Failsafe, GPS rescue, alt hold and pos hold take priority (flags from the previous cycle).
+    // BANK flies on its own rates. Failsafe, GPS rescue, alt hold and pos hold take priority (flags from the previous cycle).
     // OPEN: interaction with HEADFREE.
 #ifdef USE_BANK_MODE
     const bool bankModeRequested = IS_RC_MODE_ACTIVE(BOXBANK)
@@ -1084,9 +1084,6 @@ void processRxModes(timeUs_t currentTimeUs)
 
     if ((IS_RC_MODE_ACTIVE(BOXANGLE)
         || failsafeIsActive()
-#ifdef USE_BANK_MODE
-        || FLIGHT_MODE(BANK_MODE)
-#endif
 #ifdef USE_ALTITUDE_HOLD
         || FLIGHT_MODE(ALT_HOLD_MODE)
 #endif
@@ -1106,6 +1103,14 @@ void processRxModes(timeUs_t currentTimeUs)
     } else {
         DISABLE_FLIGHT_MODE(ANGLE_MODE); // failsafe support
     }
+
+#ifdef USE_BANK_MODE
+    // BANK sets all three rates itself, so it takes the place of ANGLE and HORIZON
+    if (FLIGHT_MODE(BANK_MODE)) {
+        canUseHorizonMode = false;
+        DISABLE_FLIGHT_MODE(ANGLE_MODE);
+    }
+#endif
 
 #if defined(USE_GPS_RESCUE) && !ENABLE_RESCUE_PLAN
     // Legacy: the pilot's switch and the failsafe procedure both fly the legacy
@@ -1312,7 +1317,7 @@ void processRxModes(timeUs_t currentTimeUs)
     }
 #endif
 
-    if (FLIGHT_MODE(ANGLE_MODE | ALT_HOLD_MODE | POS_HOLD_MODE | HORIZON_MODE)) {
+    if (FLIGHT_MODE(ANGLE_MODE | ALT_HOLD_MODE | POS_HOLD_MODE | HORIZON_MODE | BANK_MODE)) {
         LED1_ON;
         // increase frequency of attitude task to reduce drift when in angle or horizon mode
         rescheduleTask(TASK_ATTITUDE, TASK_PERIOD_HZ(acc.sampleRateHz / (float)imuConfig()->imu_process_denom));

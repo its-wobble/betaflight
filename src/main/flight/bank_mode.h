@@ -32,15 +32,16 @@
 #ifdef USE_BANK_MODE
 
 typedef struct bankInputs_s {
-    float roll;                 // Bank stick, -1..1, positive right
+    float bank;                 // Bank stick, -1..1, positive right
     float speed;                // Speed stick, 0..1
     float reverse;              // throttle stick below min_check, 0..1, 1 at the bottom
-    float yaw;                  // head check stick, -1..1, positive counter-clockwise
     float lift;                 // Lift stick, 0..1, 0.5 = 1 g
     bool armed;
     float accX;                 // specific force, body frame (X forward, Y left, Z up), g
     float accY;
     float accZ;
+    float gyroPitchDps;         // body rates, positive nose-down
+    float gyroYawDps;           // positive counter-clockwise
     float measuredPitchDeg;     // positive nose-down
     float measuredRollDeg;      // positive right
     float dt;                   // s, 0 or longer than BANK_MAX_DT_S restarts the filters
@@ -48,22 +49,26 @@ typedef struct bankInputs_s {
 } bankInputs_t;
 
 typedef struct bankOutputs_s {
-    float rollDeg;              // positive right
+    float rollDeg;              // the attitude the thrust is turned towards, positive right
     float pitchDeg;             // positive nose-down
-    float yawRateDps;           // positive counter-clockwise
+    float rateDps[3];           // body rate setpoints: roll positive right, pitch nose-down, yaw counter-clockwise
+    float yawRateDps;           // the heading's turn rate, positive counter-clockwise
     float collective;           // 0..1
     bool throttleLow;           // Lift stick at the bottom, or no collective
 } bankOutputs_t;
 
 typedef struct bankState_s {
-    float noseOffset;           // nose from the direction of travel, rad, positive counter-clockwise
-    float dragForward;          // levelled drag at 1 g of thrust, filtered, g, along the direction of travel
-    float dragRight;            // and to its right
+    float velForward;           // velocity in the heading frame, g of drag
+    float velLeft;
+    float velUp;
+    float dragLift;             // vertical part of the drag in the rotor plane, filtered, g
+    float verticalForce;        // measured vertical specific force, filtered, g
+    float liftIntegral;         // vertical thrust the vertical force loop adds, g
     float collective;           // previous update's collective
     float thrustTrim;           // factor on the modelled thrust, 1 = as bank_thrust_to_weight says
-    float trimModelVertical;    // modelled vertical force, lagged like the motors, g
+    float budgetTrim;           // the trim, filtered slowly, for the thrust the vector is shared out of
+    float trimModelThrust;      // modelled thrust, lagged like the motors, g
     float trimInflow;           // inflow through the props the trim was measured at, g of drag
-    float ballIntegral;         // yaw rate the ball has integrated in the turn, deg/s
     bool tiltLocked;            // engaged with the throttle low, no tilt until the sticks are centred
     bool reverseReady;          // the Speed stick has left the reverse zone since arming
     timeUs_t lastUpdateUs;
@@ -72,7 +77,7 @@ typedef struct bankState_s {
 void bankModeUpdate(timeUs_t currentTimeUs);
 bool bankModeIsActive(void);
 float bankModeGetAngleTarget(int axis);     // FD_ROLL or FD_PITCH, degrees
-float bankModeGetYawRate(void);             // degrees per second
+float bankModeGetRate(int axis);            // body rate setpoint, degrees per second
 float bankModeGetCollective(void);          // 0..1
 float bankModeGetThrustToWeight(void);
 bool bankModeIsThrottleLow(void);           // replaces calculateThrottleStatus() == THROTTLE_LOW under BANK

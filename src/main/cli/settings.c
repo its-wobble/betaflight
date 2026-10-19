@@ -1241,9 +1241,9 @@ const clivalue_t valueTable[] = {
 #ifdef USE_BANK_MODE
 // PG_BANK_MODE_CONFIG
     { "bank_thrust_to_weight",      VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 110, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, thrustToWeight) },
-    { "bank_head_check_range",      VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 0, 180 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, headCheckRange) },
-    { "bank_look_turn",             VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 0, 100 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, lookTurn) },
     { "bank_mid_speed",             VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 5, 500 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, midSpeed) },
+    { "bank_drag_rate",             VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 5, 500 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, dragRate) },
+    { "bank_corner_rate",           VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 30, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, cornerRate) },
 #endif // USE_BANK_MODE
 
 #if defined(USE_WING) && defined(USE_LAUNCH_WING)

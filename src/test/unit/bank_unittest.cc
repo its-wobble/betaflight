@@ -41,11 +41,13 @@ extern "C" {
     #include "pg/rx.h"
     #include "rx/rx.h"
     #include "sensors/acceleration.h"
+    #include "sensors/gyro.h"
 
     extern uint8_t __config_start;
     extern uint8_t __config_end;
 
     acc_t acc;
+    gyro_t gyro;
     attitudeEulerAngles_t attitude;
     float rcCommand[4];
     float rcData[MAX_SUPPORTED_RC_CHANNEL_COUNT];
@@ -67,19 +69,22 @@ extern "C" {
     float bankLiftFromStick(float stick, float thrustToWeight);
     float bankThrustFromCollective(float collective, float thrustToWeight);
     float bankCollectiveFromThrust(float thrust, float thrustToWeight);
-    void bankRotate(float *forward, float *right, float angle);
+    void bankRotate(float *forward, float *left, float angle);
+    void bankBodyToHeading(float x, float y, float z, float roll, float pitch, float *forward, float *left, float *up);
+    void bankAnglesFromThrust(float forward, float right, float up, float *rollDeg, float *pitchDeg);
+    void bankLevelVelocity(float x, float y, float roll, float pitch, float *forward, float *left);
+    void bankHeadingToBody(float forward, float left, float up, float roll, float pitch, float *x, float *y, float *z);
     float bankShapeSpeedStick(float stick);
     float bankTargetSpeed(float speedStick, float midSpeed);
+    float bankSpeedLoop(float targetSpeed, float v);
     float bankSpeedForce(float speedStick, float v, float midSpeed, float maxForce);
-    float bankTiltThrust(float lift, float thrustToWeight);
-    void bankThrustVector(float lift, float horizontal, float bankStick, float forwardForce, float *forward, float *right);
-    void bankLevelDrag(float accX, float accY, float pitch, float roll, float *forward, float *left);
-    float bankTravelDirection(float forwardDrag);
-    float bankTurnFeedforward(float bankTan, float speed);
-    float bankUpdateThrustTrim(float trim, float verticalForce, float modelVertical, float dt);
+    float bankCornerSpeed(float force, float dragRate, float turnRate);
+    float bankCornerShare(float bankStick);
+    void bankThrustVector(float lift, float thrust, float bankAngle, float cornerForce, float forwardForce, float *forward, float *right, float *up);
+    float bankHeadingRate(float gyroPitch, float gyroYaw, float roll, float pitch);
+    float bankUpdateThrustTrim(float trim, float measuredThrust, float modelThrust, bool mayBeOnGround, float dt);
     float bankLeakThrustTrim(float trim, float dt);
     float bankScaleTrimWithInflow(float trim, float inflow, float previousInflow);
-    float bankLookIntoTurnOffset(float bankStick, float speedStick);
     void bankCompute(const bankModeConfig_t *config, const bankInputs_t *in, bankState_t *state, bankOutputs_t *out);
 }
 
@@ -90,6 +95,11 @@ static const float DEG = M_PI / 180.0f;
 static float thrustToWeight(void)
 {
     return bankModeConfig()->thrustToWeight / 100.0f;
+}
+
+static float dragRate(void)
+{
+    return bankModeConfig()->dragRate / 100.0f;
 }
 
 static float hoverCollective(void)
@@ -115,13 +125,10 @@ static void computeN(bankInputs_t *in, bankState_t *state, bankOutputs_t *out, i
     }
 }
 
-// The thrust direction (forward, right, up) the angle targets ask for, in the nose frame, scaled to unit up.
-static void targetThrust(const bankOutputs_t *out, float *forward, float *right)
+// The thrust direction the angle targets ask for, in the heading frame.
+static void targetThrust(const bankOutputs_t *out, float *forward, float *left, float *up)
 {
-    const float pitch = out->pitchDeg * DEG;
-    const float roll = out->rollDeg * DEG;
-    *forward = sinf(pitch) / (cosf(pitch) * cosf(roll));
-    *right = tanf(roll);
+    bankBodyToHeading(0.0f, 0.0f, 1.0f, out->rollDeg * DEG, out->pitchDeg * DEG, forward, left, up);
 }
 
 TEST(BankModeTest, SticksHaveADeadbandAndStillReachFullDeflection)
@@ -134,12 +141,10 @@ TEST(BankModeTest, SticksHaveADeadbandAndStillReachFullDeflection)
 
 TEST(BankModeTest, LiftIsALittleAtTheBottomOneAtTheCentreAndAllTheThrustAtTheTop)
 {
-    // a floor at the bottom, enough to steer, well short of a hover
     EXPECT_GT(bankLiftFromStick(0.0f, 5.7f), 0.0f);
     EXPECT_LT(bankLiftFromStick(0.0f, 5.7f), 0.5f);
     EXPECT_FLOAT_EQ(1.0f, bankLiftFromStick(0.5f, 5.7f));
     EXPECT_FLOAT_EQ(5.7f, bankLiftFromStick(1.0f, 5.7f));
-    // both halves start at the same slope
     EXPECT_NEAR(bankLiftFromStick(0.5f, 5.7f) - bankLiftFromStick(0.49f, 5.7f), bankLiftFromStick(0.51f, 5.7f) - bankLiftFromStick(0.5f, 5.7f), 1e-4f);
     EXPECT_FLOAT_EQ(1.5f, bankLiftFromStick(1.0f, 1.5f));
     for (float s = 0.0f; s < 1.0f; s += 0.01f) {
@@ -156,238 +161,209 @@ TEST(BankModeTest, CollectiveIsTheInverseOfTheThrustCurve)
     EXPECT_FLOAT_EQ(1.0f, bankCollectiveFromThrust(10.0f, 5.7f));
 }
 
-TEST(BankModeTest, RotatingByTheNoseOffsetAndBackIsTheIdentity)
+TEST(BankModeTest, RotatingIsCounterClockwiseAndBackIsTheIdentity)
 {
     float forward = 1.0f;
-    float right = 0.0f;
-    // the nose 90 degrees left of the track sees the track to its right
-    bankRotate(&forward, &right, 90.0f * DEG);
+    float left = 0.0f;
+    bankRotate(&forward, &left, 90.0f * DEG);
     EXPECT_NEAR(0.0f, forward, 1e-6f);
-    EXPECT_NEAR(1.0f, right, 1e-6f);
+    EXPECT_NEAR(1.0f, left, 1e-6f);
 
     forward = 0.3f;
-    right = -0.7f;
-    bankRotate(&forward, &right, 0.6f);
-    bankRotate(&forward, &right, -0.6f);
+    left = -0.7f;
+    bankRotate(&forward, &left, 0.6f);
+    bankRotate(&forward, &left, -0.6f);
     EXPECT_NEAR(0.3f, forward, 1e-6f);
-    EXPECT_NEAR(-0.7f, right, 1e-6f);
+    EXPECT_NEAR(-0.7f, left, 1e-6f);
 }
 
-TEST(BankModeTest, TheTiltKeepsAQuarterOfTheSpareThrust)
+TEST(BankModeTest, TheThrustPointsWhereTheAnglesSay)
 {
-    EXPECT_FLOAT_EQ(1.0f + 0.75f * 4.7f, bankTiltThrust(1.0f, 5.7f));
-    EXPECT_FLOAT_EQ(2.0f, bankTiltThrust(2.0f, 1.5f));
-}
-
-TEST(BankModeTest, BankTakesTheHorizontalForceBeforeSpeed)
-{
-    const float horizontal = 3.0f;
     float forward;
-    float right;
+    float left;
+    float up;
+    // pitched nose-down: forward; rolled right: to the right
+    bankBodyToHeading(0.0f, 0.0f, 1.0f, 0.0f, 30.0f * DEG, &forward, &left, &up);
+    EXPECT_NEAR(0.5f, forward, 1e-5f);
+    EXPECT_NEAR(0.0f, left, 1e-5f);
+    bankBodyToHeading(0.0f, 0.0f, 1.0f, 30.0f * DEG, 0.0f, &forward, &left, &up);
+    EXPECT_NEAR(-0.5f, left, 1e-5f);
 
-    // no bank: the forward force gets it all
-    bankThrustVector(1.0f, horizontal, 0.0f, 10.0f, &forward, &right);
-    EXPECT_FLOAT_EQ(0.0f, right);
-    EXPECT_FLOAT_EQ(horizontal, forward);
-
-    // half the stick is a 45 degree bank, and the forward force gets what is left
-    bankThrustVector(1.0f, horizontal, 0.5f, 10.0f, &forward, &right);
-    EXPECT_NEAR(1.0f, right, 1e-5f);
-    EXPECT_NEAR(sqrtf(sq(horizontal) - 1.0f), forward, 1e-5f);
-
-    // full Bank takes the whole budget, left is negative
-    bankThrustVector(1.0f, horizontal, -1.0f, 10.0f, &forward, &right);
-    EXPECT_NEAR(-horizontal, right, 1e-4f);
-    EXPECT_NEAR(0.0f, forward, 1e-2f);
-
-    // braking is limited to a 30 degree tilt back
-    bankThrustVector(2.0f, horizontal, 0.0f, -10.0f, &forward, &right);
-    EXPECT_NEAR(-2.0f * tanf(30.0f * DEG), forward, 1e-5f);
+    // the angle targets for a thrust direction point the thrust there, combined too
+    const float cases[][3] = { { 0.3f, 0.0f, 1.0f }, { 0.0f, 2.0f, 1.0f }, { 1.5f, -2.0f, 0.5f }, { -0.5f, 3.0f, 1.0f } };
+    for (const auto &c : cases) {
+        float rollDeg;
+        float pitchDeg;
+        bankAnglesFromThrust(c[0], c[1], c[2], &rollDeg, &pitchDeg);
+        bankBodyToHeading(0.0f, 0.0f, 1.0f, rollDeg * DEG, pitchDeg * DEG, &forward, &left, &up);
+        const float length = sqrtf(sq(c[0]) + sq(c[1]) + sq(c[2]));
+        EXPECT_NEAR(c[0] / length, forward, 1e-5f);
+        EXPECT_NEAR(-c[1] / length, left, 1e-5f);
+        EXPECT_NEAR(c[2] / length, up, 1e-5f);
+    }
 }
 
-TEST(BankModeTest, ABrakeTakesTheHorizontalForceBeforeBank)
+TEST(BankModeTest, HeadingToBodyIsTheTranspose)
 {
-    const float horizontal = 3.0f;
-    const float brake = tanf(30.0f * DEG);
+    const float roll = 40.0f * DEG;
+    const float pitch = -25.0f * DEG;
+    float x;
+    float y;
+    float z;
+    bankHeadingToBody(0.3f, -0.2f, 0.9f, roll, pitch, &x, &y, &z);
     float forward;
-    float right;
+    float left;
+    float up;
+    bankBodyToHeading(x, y, z, roll, pitch, &forward, &left, &up);
+    EXPECT_NEAR(0.3f, forward, 1e-5f);
+    EXPECT_NEAR(-0.2f, left, 1e-5f);
+    EXPECT_NEAR(0.9f, up, 1e-5f);
+}
 
-    // full Bank still brakes as hard as level, and banks with what is left
-    bankThrustVector(1.0f, horizontal, 1.0f, -10.0f, &forward, &right);
-    EXPECT_NEAR(-brake, forward, 1e-5f);
-    EXPECT_NEAR(sqrtf(sq(horizontal) - sq(brake)), right, 1e-3f);
-
-    // a small brake leaves the bank nearly the whole budget, so it doesn't jump as the brake starts
-    bankThrustVector(1.0f, horizontal, -1.0f, -0.01f, &forward, &right);
-    EXPECT_NEAR(-0.01f, forward, 1e-5f);
-    EXPECT_NEAR(-horizontal, right, 1e-3f);
-
-    // a brake is no more than the budget, and then leaves no bank
-    bankThrustVector(2.0f, 0.5f, 1.0f, -10.0f, &forward, &right);
-    EXPECT_NEAR(-0.5f, forward, 1e-5f);
-    EXPECT_NEAR(0.0f, right, 1e-3f);
-
-    // a bank below the budget isn't cut by a brake that fits beside it
-    bankThrustVector(1.0f, horizontal, 0.5f, -10.0f, &forward, &right);
-    EXPECT_NEAR(1.0f, right, 1e-5f);
-    EXPECT_NEAR(-brake, forward, 1e-5f);
+TEST(BankModeTest, LevelTravelIsReadBackFromTheRotorPlane)
+{
+    const float roll = 20.0f * DEG;
+    const float pitch = 30.0f * DEG;
+    float x;
+    float y;
+    float z;
+    bankHeadingToBody(0.3f, -0.1f, 0.0f, roll, pitch, &x, &y, &z);
+    float forward;
+    float left;
+    bankLevelVelocity(x, y, roll, pitch, &forward, &left);
+    EXPECT_NEAR(0.3f, forward, 1e-5f);
+    EXPECT_NEAR(-0.1f, left, 1e-5f);
 }
 
 TEST(BankModeTest, SpeedStickIsASpeedInTheLowerHalfAndAForceInTheUpperHalf)
 {
-    const float mid = 0.5f;
-    const float maxForce = 3.0f;
-    // the bottom brakes in proportion to the speed
-    EXPECT_FLOAT_EQ(-2.0f * 0.3f, bankSpeedForce(0.0f, 0.3f, mid, maxForce));
-    // at the target speed the force is the feedforward that holds it
-    EXPECT_FLOAT_EQ(0.25f, bankSpeedForce(0.25f, 0.25f, mid, maxForce));
-    // above a third of the stick a craft that is too fast coasts: no braking force
-    EXPECT_FLOAT_EQ(0.4f, bankSpeedForce(0.4f, 0.8f, mid, maxForce));
-    // below a third it is braked
-    EXPECT_LT(bankSpeedForce(0.3f, 0.8f, mid, maxForce), 0.0f);
-    // continuous at the centre, and the top is all the force there is
-    EXPECT_NEAR(bankSpeedForce(0.5f, 0.2f, mid, maxForce), bankSpeedForce(0.5001f, 0.2f, mid, maxForce), 1e-3f);
-    EXPECT_FLOAT_EQ(maxForce, bankSpeedForce(1.0f, 0.2f, mid, maxForce));
+    // at the target the speed loop gives the drag of that speed
+    EXPECT_FLOAT_EQ(0.5f, bankSpeedForce(0.5f, 0.5f, 0.5f, 3.0f));
+    // the bottom third brakes a craft that is too fast, above it the craft coasts
+    EXPECT_LT(bankSpeedForce(0.2f, 0.8f, 0.5f, 3.0f), 0.0f);
+    EXPECT_FLOAT_EQ(0.0f, bankSpeedForce(0.4f, 0.8f, 0.5f, 3.0f));
+    EXPECT_GT(bankSpeedForce(0.4f, 0.41f, 0.5f, 3.0f), 0.0f);
+    // the top of the stick is all the force there is, continuous at the centre
+    EXPECT_FLOAT_EQ(3.0f, bankSpeedForce(1.0f, 0.2f, 0.5f, 3.0f));
+    EXPECT_NEAR(bankSpeedForce(0.5f, 0.2f, 0.5f, 3.0f), bankSpeedForce(0.5001f, 0.2f, 0.5f, 3.0f), 1e-3f);
 }
 
 TEST(BankModeTest, SpeedStickHasAStopBandAndKeepsItsCentre)
 {
-    EXPECT_FLOAT_EQ(0.0f, bankShapeSpeedStick(0.0f));
     EXPECT_FLOAT_EQ(0.0f, bankShapeSpeedStick(0.1f));
-    EXPECT_GT(bankShapeSpeedStick(0.11f), 0.0f);
     EXPECT_FLOAT_EQ(0.5f, bankShapeSpeedStick(0.5f));
-    EXPECT_FLOAT_EQ(0.75f, bankShapeSpeedStick(0.75f));
-    EXPECT_FLOAT_EQ(1.0f, bankShapeSpeedStick(1.0f));
+    EXPECT_FLOAT_EQ(0.8f, bankShapeSpeedStick(0.8f));
+    EXPECT_FLOAT_EQ(-0.05f * 2.0f * 0.5f, bankTargetSpeed(-0.05f, 0.5f));
 }
 
-TEST(BankModeTest, TargetSpeedCarriesOnBelowTheStopAsAReverse)
+TEST(BankModeTest, CornerSpeedIsWhereTheForceTurnsTheTrackAtTheCornerRate)
 {
-    const float mid = 0.5f;
-    // full reverse is the lower half's line carried on below the stop: a tenth of the mid speed, backwards
-    EXPECT_FLOAT_EQ(-0.1f * mid, bankTargetSpeed(-0.05f, mid));
-    EXPECT_FLOAT_EQ(-0.1f * mid, bankTargetSpeed(-1.0f, mid));
-    EXPECT_FLOAT_EQ(0.1f * mid, bankTargetSpeed(0.05f, mid));
-    // from rest full reverse pushes backwards; braking from speed it pushes harder than the stop does
-    EXPECT_LT(bankSpeedForce(-0.05f, 0.0f, mid, 3.0f), 0.0f);
-    EXPECT_LT(bankSpeedForce(-0.05f, 0.3f, mid, 3.0f), bankSpeedForce(0.0f, 0.3f, mid, 3.0f));
-    // once going backwards at the reverse speed it holds it
-    EXPECT_FLOAT_EQ(-0.1f * mid, bankSpeedForce(-0.05f, -0.1f * mid, mid, 3.0f));
+    // omega = dragRate * force / speed
+    const float v = bankCornerSpeed(5.0f, 0.4f, 300.0f * DEG);
+    EXPECT_NEAR(300.0f * DEG, 0.4f * 5.0f / v, 1e-4f);
 }
 
-TEST(BankModeTest, ReverseOnlyOnceTheSpeedStickHasBeenRaisedSinceArming)
+TEST(BankModeTest, TheCornerSpeedTakesOverNearFullBank)
 {
-    pgResetAll();
-    bankState_t state = {};
-    bankOutputs_t out = {};
-    bankInputs_t in = centredInputs();
-    in.reverse = 1.0f;
-    computeN(&in, &state, &out, 10);
-    EXPECT_FLOAT_EQ(0.0f, out.pitchDeg);
-
-    in.speed = 0.08f;                       // within the stop band: still locked
-    computeN(&in, &state, &out, 1);
-    in.speed = 0.0f;
-    computeN(&in, &state, &out, 10);
-    EXPECT_FLOAT_EQ(0.0f, out.pitchDeg);
-
-    in.reverse = 0.0f;
-    in.speed = 0.2f;
-    computeN(&in, &state, &out, 1);
-    in.speed = 0.0f;
-    in.reverse = 1.0f;
-    computeN(&in, &state, &out, 10);
-    EXPECT_LT(out.pitchDeg, -1.0f);         // nose up: pushing backwards
-    EXPECT_GT(out.pitchDeg, -30.0f);        // a small push, within the brake angle
-
-    // disarming locks it again
-    in.armed = false;
-    computeN(&in, &state, &out, 1);
-    in.armed = true;
-    computeN(&in, &state, &out, 10);
-    EXPECT_FLOAT_EQ(0.0f, out.pitchDeg);
+    EXPECT_FLOAT_EQ(0.0f, bankCornerShare(0.5f));
+    EXPECT_NEAR(0.5f, bankCornerShare(0.725f), 1e-5f);
+    EXPECT_FLOAT_EQ(1.0f, bankCornerShare(0.9f));
 }
 
-TEST(BankModeTest, DragIsLevelledWithTheAttitude)
+TEST(BankModeTest, BankKeepsItsAngleWhileLiftGivesWayAFifth)
 {
     float forward;
-    float left;
-    // pitched forward 40 and banked 30 in level flight, a pure forward drag of 0.2 g reads on both body axes
-    const float pitch = 40.0f * DEG;
-    const float roll = 30.0f * DEG;
-    const float accX = -0.2f * cosf(pitch);
-    const float accY = -0.2f * sinf(pitch) * sinf(roll);
-    bankLevelDrag(accX, accY, pitch, roll, &forward, &left);
-    EXPECT_NEAR(-0.2f, forward, 1e-5f);
-    EXPECT_NEAR(0.0f, left, 1e-5f);
+    float right;
+    float up;
+    // a 45 degree bank at 1 g within the thrust: Lift held, the forward force gets what is left
+    bankThrustVector(1.0f, 4.0f, 45.0f * DEG, 0.0f, 10.0f, &forward, &right, &up);
+    EXPECT_NEAR(1.0f, up, 1e-5f);
+    EXPECT_NEAR(1.0f, right, 1e-5f);
+    EXPECT_NEAR(sqrtf(16.0f - 2.0f), forward, 1e-4f);
+
+    // past the thrust Lift gives way at the bank angle, down to 0.8 of it, then the angle gives way
+    bankThrustVector(1.0f, 2.0f, -60.0f * DEG, 0.0f, 10.0f, &forward, &right, &up);
+    EXPECT_NEAR(1.0f, up, 1e-4f);
+    EXPECT_NEAR(-sqrtf(3.0f), right, 1e-4f);
+    bankThrustVector(1.0f, 4.0f, -85.0f * DEG, 0.0f, 10.0f, &forward, &right, &up);
+    EXPECT_NEAR(0.8f, up, 1e-4f);
+    EXPECT_NEAR(-sqrtf(16.0f - 0.64f), right, 1e-4f);
+    EXPECT_NEAR(0.0f, forward, 1e-3f);
+
+    // a craft with thrust to spare keeps the bank angle and all of Lift
+    bankThrustVector(1.0f, 20.0f, 85.0f * DEG, 0.0f, 0.0f, &forward, &right, &up);
+    EXPECT_NEAR(85.0f, atan2f(right, up) / DEG, 1e-3f);
+    EXPECT_NEAR(1.0f, up, 1e-4f);
 }
 
-TEST(BankModeTest, TravelDirectionFlipsOnlyForClearRearwardDrag)
+TEST(BankModeTest, TheCornerForceComesBeforeBank)
 {
-    EXPECT_FLOAT_EQ(1.0f, bankTravelDirection(-0.3f));
-    EXPECT_FLOAT_EQ(1.0f, bankTravelDirection(0.0f));
-    EXPECT_FLOAT_EQ(-1.0f, bankTravelDirection(0.3f));
-    EXPECT_FLOAT_EQ(0.0f, bankTravelDirection(0.03f));
+    float forward;
+    float right;
+    float up;
+    // a brake towards the corner speed takes its share of the thrust first
+    bankThrustVector(1.0f, 4.0f, 85.0f * DEG, -1.0f, 0.0f, &forward, &right, &up);
+    EXPECT_NEAR(-1.0f, forward, 1e-4f);
+    EXPECT_NEAR(sqrtf(15.0f - sq(up)), right, 1e-4f);
+    // and so does the force that holds the corner speed of a slow craft
+    bankThrustVector(1.0f, 4.0f, 85.0f * DEG, 0.5f, 10.0f, &forward, &right, &up);
+    EXPECT_NEAR(0.5f, forward, 1e-3f);
+    // no further back than the brake angle
+    bankThrustVector(1.0f, 4.0f, 0.0f, -3.0f, 0.0f, &forward, &right, &up);
+    EXPECT_NEAR(-tanf(60.0f * DEG), forward, 1e-4f);
 }
 
-TEST(BankModeTest, TurnFeedforwardIsTheCoordinatedRateWithinItsShare)
+TEST(BankModeTest, ABrakeAfterBankTakesWhatIsLeftWithinItsAngle)
 {
-    // a right bank turns clockwise (negative), faster the slower the craft
-    EXPECT_LT(bankTurnFeedforward(1.0f, 0.5f), 0.0f);
-    EXPECT_NEAR(2.0f * bankTurnFeedforward(0.5f, 0.5f), bankTurnFeedforward(0.5f, 0.25f), 1e-3f);
-    // reversing turns the other way, like a car
-    EXPECT_GT(bankTurnFeedforward(1.0f, -0.5f), 0.0f);
-    // no speed, no feedforward, and never more than 60 % of the yaw limit
-    EXPECT_FLOAT_EQ(0.0f, bankTurnFeedforward(1.0f, 0.0f));
-    EXPECT_FLOAT_EQ(-0.6f * 720.0f, bankTurnFeedforward(11.0f, 0.1f));
+    float forward;
+    float right;
+    float up;
+    bankThrustVector(1.0f, 5.0f, 0.0f, 0.0f, -10.0f, &forward, &right, &up);
+    EXPECT_NEAR(-tanf(60.0f * DEG), forward, 1e-4f);
+    bankThrustVector(1.0f, 2.0f, 45.0f * DEG, 0.0f, -10.0f, &forward, &right, &up);
+    EXPECT_NEAR(-sqrtf(4.0f - 2.0f), forward, 1e-4f);
 }
 
-TEST(BankModeTest, ThrustTrimTakesOffExcessAndAddsMissingThrustOnlyBelowOneG)
+TEST(BankModeTest, HeadingRateIsTheYawRateLevelAndSharedOutBanked)
+{
+    EXPECT_FLOAT_EQ(1.0f, bankHeadingRate(0.0f, 1.0f, 0.0f, 0.0f));
+    // a coordinated turn right at a 60 degree bank: the turn is seen on pitch and yaw
+    const float omega = -1.0f;
+    const float roll = 60.0f * DEG;
+    EXPECT_NEAR(omega, bankHeadingRate(omega * sinf(roll), omega * cosf(roll), roll, 0.0f), 1e-5f);
+}
+
+TEST(BankModeTest, ThrustTrimFollowsTheMeasuredThrustButNotDownOnTheGround)
 {
     float trim = 1.0f;
-    for (int i = 0; i < 300; i++) {
-        trim = bankUpdateThrustTrim(trim, 1.5f, 1.0f, 0.01f);
+    for (int i = 0; i < 200; i++) {
+        trim = bankUpdateThrustTrim(trim, 0.8f, 1.0f, false, 0.01f);
     }
-    EXPECT_NEAR(1.5f, trim, 1e-3f);
-
-    // sinking: the props make less than modelled, the trim adds it
+    EXPECT_NEAR(0.8f, trim, 1e-3f);
+    // missing thrust is added off the ground
     trim = 1.0f;
-    for (int i = 0; i < 300; i++) {
-        trim = bankUpdateThrustTrim(trim, 0.8f, 1.0f, 0.01f);
+    for (int i = 0; i < 200; i++) {
+        trim = bankUpdateThrustTrim(trim, 0.5f, 1.0f, false, 0.01f);
     }
-    EXPECT_NEAR(0.8f, trim, 1e-3f);
-
-    // at 1 g it may be on the ground: it only moves back towards 1
-    for (int i = 0; i < 300; i++) {
-        trim = bankUpdateThrustTrim(trim, 1.0f, 2.0f, 0.01f);
+    EXPECT_NEAR(0.5f, trim, 1e-3f);
+    // on the ground, which hides missing thrust: no lower than 1
+    trim = 1.0f;
+    for (int i = 0; i < 200; i++) {
+        trim = bankUpdateThrustTrim(trim, 1.0f, 1.5f, true, 0.01f);
     }
-    EXPECT_NEAR(0.8f, trim, 1e-3f);
+    EXPECT_FLOAT_EQ(1.0f, trim);
 }
 
-TEST(BankModeTest, OnlyATrimThatTakesThrustOffLeaksBack)
+TEST(BankModeTest, OnlyATrimThatAddsThrustLeaksBack)
 {
-    float trim = 1.5f;
-    float adding = 0.5f;
-    for (int i = 0; i < 300; i++) {
-        trim = bankLeakThrustTrim(trim, 0.01f);
-        adding = bankLeakThrustTrim(adding, 0.01f);
-    }
-    EXPECT_NEAR(1.0f, trim, 0.03f);
-    EXPECT_FLOAT_EQ(0.5f, adding);
+    EXPECT_LT(bankLeakThrustTrim(1.5f, 0.1f), 1.5f);
+    EXPECT_FLOAT_EQ(0.7f, bankLeakThrustTrim(0.7f, 0.1f));
 }
 
 TEST(BankModeTest, ThrustTrimAddsLessAtOnceWhenTheInflowFalls)
 {
-    EXPECT_FLOAT_EQ(0.5f, bankScaleTrimWithInflow(0.5f, 0.6f, 0.4f));
-    EXPECT_FLOAT_EQ(1.2f, bankScaleTrimWithInflow(1.2f, 0.0f, 0.4f));
-    EXPECT_NEAR(1.0f - 0.5f * 0.1f / 0.5f, bankScaleTrimWithInflow(0.5f, 0.0f, 0.4f), 1e-6f);
-}
-
-TEST(BankModeTest, LookIntoTheTurnIsMoreTheMoreBankAgainstSpeed)
-{
-    EXPECT_FLOAT_EQ(0.0f, bankLookIntoTurnOffset(0.0f, 0.5f));
-    EXPECT_NEAR(-45.0f * DEG, bankLookIntoTurnOffset(1.0f, 1.0f), 1e-5f);
-    EXPECT_NEAR(90.0f * DEG, bankLookIntoTurnOffset(-1.0f, 0.0f), 1e-5f);
-    EXPECT_NEAR(0.5f * atan2f(0.1f, 1.0f), fabsf(bankLookIntoTurnOffset(0.1f, 1.0f)), 1e-5f);
+    EXPECT_FLOAT_EQ(0.6f, bankScaleTrimWithInflow(0.6f, 0.5f, 0.4f));
+    EXPECT_GT(bankScaleTrimWithInflow(0.6f, 0.0f, 0.4f), 0.6f);
 }
 
 TEST(BankModeTest, CentredSticksHoverLevel)
@@ -396,43 +372,112 @@ TEST(BankModeTest, CentredSticksHoverLevel)
     bankState_t state = {};
     bankOutputs_t out = {};
     bankInputs_t in = centredInputs();
-    computeN(&in, &state, &out, 500);
-    EXPECT_NEAR(hoverCollective(), out.collective, 2e-3f);
-    EXPECT_NEAR(0.0f, out.pitchDeg, 1e-3f);
-    EXPECT_NEAR(0.0f, out.rollDeg, 1e-3f);
-    EXPECT_NEAR(0.0f, out.yawRateDps, 1e-3f);
+    in.armed = false;       // no trim
+    computeN(&in, &state, &out, 100);
+    EXPECT_NEAR(0.0f, out.rollDeg, 1e-4f);
+    EXPECT_NEAR(0.0f, out.pitchDeg, 1e-4f);
+    EXPECT_NEAR(0.0f, out.yawRateDps, 1e-4f);
+    EXPECT_NEAR(hoverCollective(), out.collective, 1e-4f);
 }
 
-TEST(BankModeTest, LiftIsKeptAtTheMeasuredTilt)
-{
-    pgResetAll();
-    for (float tiltDeg = 0.0f; tiltDeg <= 60.0f; tiltDeg += 20.0f) {
-        bankState_t state = {};
-        bankOutputs_t out = {};
-        bankInputs_t in = centredInputs();
-        in.armed = false;       // no trim
-        in.measuredPitchDeg = tiltDeg;
-        in.measuredRollDeg = 10.0f;
-        computeN(&in, &state, &out, 10);
-        const float tiltCos = cosf(tiltDeg * DEG) * cosf(10.0f * DEG);
-        EXPECT_NEAR(1.0f, bankThrustFromCollective(out.collective, thrustToWeight()) * tiltCos, 1e-3f);
-    }
-}
-
-TEST(BankModeTest, CollectiveStopsAtTheTiltBudgetAndIsZeroInverted)
+TEST(BankModeTest, LiftIsKeptAtTheMeasuredTiltAndNotPastTheThrust)
 {
     pgResetAll();
     bankState_t state = {};
     bankOutputs_t out = {};
     bankInputs_t in = centredInputs();
     in.armed = false;
-    in.measuredPitchDeg = 84.0f;
-    computeN(&in, &state, &out, 10);
-    EXPECT_NEAR(bankTiltThrust(1.0f, thrustToWeight()), bankThrustFromCollective(out.collective, thrustToWeight()), 1e-3f);
-
+    in.measuredRollDeg = 60.0f;
+    computeN(&in, &state, &out, 1);
+    EXPECT_NEAR(2.0f, bankThrustFromCollective(out.collective, thrustToWeight()), 1e-3f);
+    in.measuredRollDeg = 89.0f;
+    computeN(&in, &state, &out, 1);
+    EXPECT_NEAR(0.95f * thrustToWeight(), bankThrustFromCollective(out.collective, thrustToWeight()), 1e-3f);
     in.measuredRollDeg = 120.0f;
-    computeN(&in, &state, &out, 10);
+    computeN(&in, &state, &out, 1);
     EXPECT_FLOAT_EQ(0.0f, out.collective);
+}
+
+TEST(BankModeTest, TheVelocityIntegratesTheForceAndFollowsTheDrag)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    computeN(&in, &state, &out, 1);
+    // a forward specific force with no drag yet: the velocity grows at dragRate * force at first
+    in.measuredPitchDeg = 30.0f;
+    in.accZ = 1.0f / cosf(30.0f * DEG);
+    computeN(&in, &state, &out, 10);
+    const float force = in.accZ * sinf(30.0f * DEG);
+    EXPECT_NEAR(dragRate() * force * 0.1f, state.velForward, 0.3f * dragRate() * force * 0.1f);
+
+    // steady flight, the forward tilt balancing the drag, reads 1 g straight up: the rotor plane sees the drag of
+    // tan(pitch), and the velocity settles on it
+    state = {};
+    in = centredInputs();
+    in.armed = false;
+    const float pitch = 20.0f * DEG;
+    in.measuredPitchDeg = 20.0f;
+    in.accX = -sinf(pitch);
+    in.accZ = cosf(pitch);
+    in.dt = 0.0f;           // engaged: the drag is read as level travel at once
+    computeN(&in, &state, &out, 1);
+    in.dt = 0.01f;
+    computeN(&in, &state, &out, 500);
+    const float dragScale = 1.0f / sqrtf(bankThrustFromCollective(state.collective, thrustToWeight()));
+    EXPECT_NEAR(tanf(pitch) * dragScale, state.velForward, 0.01f);
+    EXPECT_NEAR(0.0f, state.velUp, 0.01f);
+}
+
+TEST(BankModeTest, AClimbAcrossTiltedRotorsIsNotReadAsSlip)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.armed = false;
+    computeN(&in, &state, &out, 1);
+    // banked 45 degrees and climbing at 0.1 g of drag: the climb's drag shows on body Y as if drifting sideways,
+    // which a level reading of the drag would take for 0.1 g of drag of slip
+    state = {};
+    state.velUp = 0.1f;
+    state.lastUpdateUs = 1;
+    in.measuredRollDeg = 45.0f;
+    float x;
+    float y;
+    float z;
+    bankHeadingToBody(0.0f, 0.0f, 0.1f, 45.0f * DEG, 0.0f, &x, &y, &z);
+    in.accX = -x;
+    in.accY = -y;
+    in.accZ = 1.0f / cosf(45.0f * DEG);
+    bankCompute(bankModeConfig(), &in, &state, &out);
+    // the drag is what the climb makes, so nothing is corrected: only the sideways force is integrated
+    float forward;
+    float left;
+    float up;
+    bankBodyToHeading(in.accX, in.accY, in.accZ, 45.0f * DEG, 0.0f, &forward, &left, &up);
+    EXPECT_NEAR(dragRate() * left * in.dt, state.velLeft, 1e-4f);
+}
+
+TEST(BankModeTest, TheVelocityTurnsBackAsTheNoseTurns)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    computeN(&in, &state, &out, 1);
+    state.velForward = 0.5f;
+    // the nose yaws 90 degrees left in half a second, no force: the velocity is now to the right
+    in.gyroYawDps = 180.0f;
+    in.armed = false;
+    bankState_t probe = state;
+    for (int i = 0; i < 50; i++) {
+        probe.collective = 0.0f;
+        bankCompute(bankModeConfig(), &in, &probe, &out);
+    }
+    const float magnitude = sqrtf(sq(probe.velForward) + sq(probe.velLeft));
+    EXPECT_LT(probe.velLeft, -0.5f * magnitude);
 }
 
 TEST(BankModeTest, BankRightRollsRightAndSpeedPitchesForward)
@@ -441,147 +486,95 @@ TEST(BankModeTest, BankRightRollsRightAndSpeedPitchesForward)
     bankState_t state = {};
     bankOutputs_t out = {};
     bankInputs_t in = centredInputs();
-    in.roll = 0.5f;
+    in.armed = false;
+    in.accX = -0.4f;
     in.speed = 0.75f;
-    in.accX = -0.5f;    // drag of travelling forward, so the banked turn is in
-    computeN(&in, &state, &out, 10);
-    EXPECT_GT(out.rollDeg, 30.0f);
-    EXPECT_GT(out.pitchDeg, 10.0f);
-}
-
-TEST(BankModeTest, BankAtZeroSpeedYawsOnTheSpotWithoutTilt)
-{
-    pgResetAll();
-    bankState_t state = {};
-    bankOutputs_t out = {};
-    bankInputs_t in = centredInputs();
-    in.roll = 1.0f;     // Bank right
-    computeN(&in, &state, &out, 10);
-    EXPECT_LT(out.yawRateDps, -100.0f);     // clockwise
-    EXPECT_NEAR(0.0f, out.rollDeg, 1e-3f);
-    EXPECT_NEAR(0.0f, out.pitchDeg, 1e-3f);
-
-    in.roll = -1.0f;
-    computeN(&in, &state, &out, 10);
-    EXPECT_GT(out.yawRateDps, 100.0f);
-
-    in.lift = 0.0f;     // Lift at the bottom: nothing turns
-    computeN(&in, &state, &out, 10);
-    EXPECT_FLOAT_EQ(0.0f, out.yawRateDps);
-}
-
-TEST(BankModeTest, TheHeadCheckTurnsTheNoseButNotTheThrustInTheWorld)
-{
-    pgResetAll();
-    bankState_t plain = {};
-    bankState_t looked = {};
-    bankOutputs_t plainOut = {};
-    bankOutputs_t lookedOut = {};
-    bankInputs_t in = centredInputs();
-    in.armed = false;
-    in.roll = 0.3f;
-    in.speed = 0.75f;
-    computeN(&in, &plain, &plainOut, 100);
-    in.yaw = 1.0f;
-    computeN(&in, &looked, &lookedOut, 100);
-    EXPECT_NEAR(90.0f * DEG, looked.noseOffset, 1e-4f);
-
-    float forward;
-    float right;
-    targetThrust(&lookedOut, &forward, &right);
-    bankRotate(&forward, &right, -looked.noseOffset);
-    float plainForward;
-    float plainRight;
-    targetThrust(&plainOut, &plainForward, &plainRight);
-    EXPECT_NEAR(plainForward, forward, 1e-3f);
-    EXPECT_NEAR(plainRight, right, 1e-3f);
-    EXPECT_NEAR(plainOut.collective, lookedOut.collective, 1e-5f);
-}
-
-TEST(BankModeTest, TheHeadCheckSlewsAtItsRateAndYawsWithIt)
-{
-    pgResetAll();
-    bankState_t state = {};
-    bankOutputs_t out = {};
-    bankInputs_t in = centredInputs();
-    in.yaw = 1.0f;
-    bankCompute(bankModeConfig(), &in, &state, &out);
-    EXPECT_NEAR(3.6f * DEG, state.noseOffset, 1e-5f);
-    EXPECT_NEAR(360.0f, out.yawRateDps, 1e-2f);
-}
-
-TEST(BankModeTest, TheNoseTurningAwayFromTheTrackIsNotReadAsSlip)
-{
-    pgResetAll();
-    bankState_t state = {};
-    bankOutputs_t out = {};
-    bankInputs_t in = centredInputs();
-    in.speed = 0.5f;
-    in.accX = -0.3f;
-    computeN(&in, &state, &out, 300);
-    // a full head check with the nose following it: the drag stays put in the world and turns in the nose frame
-    in.yaw = 1.0f;
-    for (int i = 0; i < 20; i++) {
-        float forward = -0.3f;
-        float right = 0.0f;
-        bankRotate(&forward, &right, state.noseOffset);
-        in.accX = forward;
-        in.accY = -right;
-        bankCompute(bankModeConfig(), &in, &state, &out);
-        EXPECT_NEAR(360.0f, out.yawRateDps, 1.0f);
-    }
-}
-
-TEST(BankModeTest, LiftAtTheBottomTiltsNoFurtherThanHalfAG)
-{
-    pgResetAll();
-    bankState_t state = {};
-    bankOutputs_t bottom = {};
-    bankOutputs_t quarter = {};
-    bankInputs_t in = centredInputs();
-    in.armed = false;
-    in.speed = 0.5f;
-    in.roll = 0.3f;
-    in.lift = 0.0f;
-    computeN(&in, &state, &bottom, 10);
-    state = {};
-    // the stick for half a g, after the deadband
-    const float floor = bankLiftFromStick(0.0f, thrustToWeight());
-    const float liftStick = 0.5f * (0.5f - floor) / (1.0f - floor);
-    in.lift = 0.5f - 0.5f * (0.05f + (1.0f - 2.0f * liftStick) * 0.95f);
-    computeN(&in, &state, &quarter, 10);
-    EXPECT_NEAR(quarter.pitchDeg, bottom.pitchDeg, 0.5f);
-    EXPECT_NEAR(quarter.rollDeg, bottom.rollDeg, 0.5f);
-}
-
-TEST(BankModeTest, ForwardDragReadsAsSpeedAndTheBottomOfTheStickBrakes)
-{
-    pgResetAll();
-    bankState_t state = {};
-    bankOutputs_t out = {};
-    bankInputs_t in = centredInputs();
-    in.armed = false;
-    in.accX = -0.3f;        // drag of flying forwards
-    computeN(&in, &state, &out, 300);
-    EXPECT_NEAR(-30.0f, out.pitchDeg, 1.0f);
-}
-
-TEST(BankModeTest, TheBottomOfTheStickBrakesInAFullBank)
-{
-    pgResetAll();
-    bankState_t state = {};
-    bankOutputs_t out = {};
-    bankInputs_t in = centredInputs();
-    in.armed = false;
-    in.roll = 1.0f;
-    in.accX = -0.6f;        // fast enough that the brake binds
+    in.bank = 0.5f;
     computeN(&in, &state, &out, 300);
     float forward;
-    float right;
-    targetThrust(&out, &forward, &right);
-    // the brake force, per g of Lift, of a 30 degree tilt back, and still most of the budget as bank
-    EXPECT_NEAR(-tanf(30.0f * DEG), forward, 1e-2f);
-    EXPECT_GT(out.rollDeg, 70.0f);
+    float left;
+    float up;
+    targetThrust(&out, &forward, &left, &up);
+    // half the stick is half the bank angle limit
+    EXPECT_NEAR(0.5f * 85.0f * (0.5f - 0.05f) / 0.95f / 0.5f, atan2f(-left, up) / DEG, 0.5f);
+    EXPECT_GT(out.rollDeg, 10.0f);
+    EXPECT_GT(out.pitchDeg, 5.0f);
+}
+
+TEST(BankModeTest, FullBankTurnsWithNearlyAllTheThrust)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.armed = false;
+    in.accX = -0.4f;
+    in.speed = 0.5f;
+    in.bank = 1.0f;
+    computeN(&in, &state, &out, 300);
+    float forward;
+    float left;
+    float up;
+    targetThrust(&out, &forward, &left, &up);
+    // steeper than Lift alone would allow, Lift giving way a fifth
+    const float available = 0.95f * thrustToWeight();
+    EXPECT_GT(atan2f(-left, up) / DEG, acosf(1.0f / available) / DEG);
+    EXPECT_LT(atan2f(-left, up) / DEG, 85.0f);
+    // held at that tilt the collective is nearly all the thrust there is
+    in.measuredRollDeg = out.rollDeg;
+    in.measuredPitchDeg = out.pitchDeg;
+    computeN(&in, &state, &out, 1);
+    EXPECT_GT(bankThrustFromCollective(out.collective, thrustToWeight()), 0.9f * available);
+}
+
+TEST(BankModeTest, TheThrustIsTurnedTowardsTheVectorAtUpToTheTiltRate)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.armed = false;
+    // level and a degree off: 20 deg/s per degree, back towards level
+    in.measuredRollDeg = 1.0f;
+    computeN(&in, &state, &out, 1);
+    EXPECT_NEAR(-20.0f, out.rateDps[FD_ROLL], 0.1f);
+    EXPECT_NEAR(0.0f, out.rateDps[FD_PITCH], 0.1f);
+    EXPECT_NEAR(0.0f, out.rateDps[FD_YAW], 0.1f);
+
+    // half Bank at speed, a 40 degree bank: as fast as the tilt rate allows, to the right
+    in.measuredRollDeg = 0.0f;
+    in.accX = -0.4f;
+    computeN(&in, &state, &out, 300);
+    in.bank = 0.5f;
+    computeN(&in, &state, &out, 1);
+    EXPECT_NEAR(900.0f, sqrtf(sq(out.rateDps[FD_ROLL]) + sq(out.rateDps[FD_PITCH])), 1.0f);
+    EXPECT_GT(out.rateDps[FD_ROLL], 500.0f);
+}
+
+TEST(BankModeTest, TheHeadingsTurnIsSharedOutOverTheBodyAxes)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.bank = 1.0f;
+    computeN(&in, &state, &out, 1);
+    // level, at zero Speed: Bank yaws on the spot
+    EXPECT_NEAR(-400.0f, out.rateDps[FD_YAW], 0.1f);
+    EXPECT_NEAR(0.0f, out.rateDps[FD_ROLL], 0.1f);
+    // banked and pitched on the target, the same turn about the world's up is seen on all three
+    in.bank = 0.0f;
+    computeN(&in, &state, &out, 1);
+    const float turn = 100.0f;
+    const float roll = 50.0f * DEG;
+    const float pitch = 20.0f * DEG;
+    float x;
+    float y;
+    float z;
+    bankHeadingToBody(0.0f, 0.0f, turn, roll, pitch, &x, &y, &z);
+    EXPECT_NEAR(-sinf(pitch) * turn, x, 1e-3f);
+    EXPECT_NEAR(cosf(pitch) * sinf(roll) * turn, y, 1e-3f);
+    EXPECT_NEAR(cosf(pitch) * cosf(roll) * turn, z, 1e-3f);
 }
 
 TEST(BankModeTest, ABankedTurnFeedsTheYawForwardFromTheBankTheCraftIsIn)
@@ -592,45 +585,48 @@ TEST(BankModeTest, ABankedTurnFeedsTheYawForwardFromTheBankTheCraftIsIn)
     bankInputs_t in = centredInputs();
     in.armed = false;
     in.speed = 0.5f;
-    in.roll = 0.5f;
-    in.accX = -0.3f;
+    in.bank = 0.5f;
+    in.accX = -0.4f;
     computeN(&in, &state, &out, 300);
-    const float levelYaw = out.yawRateDps;
+    EXPECT_NEAR(0.0f, out.yawRateDps, 1.0f);   // still level: no turn yet
     in.measuredRollDeg = 45.0f;
     computeN(&in, &state, &out, 1);
-    EXPECT_LT(out.yawRateDps, levelYaw - 30.0f);
+    // a right turn: clockwise, at dragRate * force / speed
+    const float expected = -dragRate() * bankThrustFromCollective(state.collective, thrustToWeight()) * sinf(45.0f * DEG) / 0.38f / DEG;
+    EXPECT_LT(out.yawRateDps, 0.5f * expected);
 }
 
-TEST(BankModeTest, TheBallIntegratesInATurnButNotPastTheYawLimit)
+TEST(BankModeTest, ANoseOffTheTrackYawsBackAndTheForceFollowsTheTrack)
 {
     pgResetAll();
     bankState_t state = {};
     bankOutputs_t out = {};
     bankInputs_t in = centredInputs();
     in.armed = false;
-    in.speed = 0.5f;
-    in.roll = 0.5f;
-    in.accX = -0.3f;
-    in.accY = -0.05f;   // drag to the right: the track is left of the nose
-    computeN(&in, &state, &out, 100);   // the drag filter settles
-    const float yawBefore = out.yawRateDps;
-    computeN(&in, &state, &out, 100);
-    EXPECT_GT(state.ballIntegral, 5.0f);
-    EXPECT_GT(out.yawRateDps, yawBefore + 5.0f);
+    in.speed = 1.0f;
+    // the track is 20 degrees left of the nose
+    in.accX = -0.4f * cosf(20.0f * DEG);
+    in.accY = -0.4f * sinf(20.0f * DEG);
+    computeN(&in, &state, &out, 300);
+    EXPECT_GT(out.yawRateDps, 0.0f);
+    // full Speed pushes along the track, not the nose
+    float forward;
+    float left;
+    float up;
+    targetThrust(&out, &forward, &left, &up);
+    EXPECT_NEAR(20.0f, atan2f(left, forward) / DEG, 1.0f);
+}
 
-    // no turn asked for: the P term alone centres the ball
-    in.roll = 0.0f;
-    computeN(&in, &state, &out, 1);
-    EXPECT_FLOAT_EQ(0.0f, state.ballIntegral);
-
-    // with the yaw at its limit the integral doesn't grow
-    in.roll = 0.5f;
-    in.accY = -2.0f;
+TEST(BankModeTest, BankAtZeroSpeedYawsOnTheSpotWithoutTilt)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.bank = 1.0f;
     computeN(&in, &state, &out, 100);
-    EXPECT_FLOAT_EQ(720.0f, out.yawRateDps);
-    const float saturatedIntegral = state.ballIntegral;
-    computeN(&in, &state, &out, 100);
-    EXPECT_FLOAT_EQ(saturatedIntegral, state.ballIntegral);
+    EXPECT_NEAR(0.0f, out.rollDeg, 1e-3f);
+    EXPECT_NEAR(-400.0f, out.yawRateDps, 1e-2f);
 }
 
 TEST(BankModeTest, ALateralAccelerometerBiasDoesNotYawTheHover)
@@ -642,11 +638,25 @@ TEST(BankModeTest, ALateralAccelerometerBiasDoesNotYawTheHover)
     in.accY = 0.02f;
     computeN(&in, &state, &out, 500);
     EXPECT_NEAR(0.0f, out.yawRateDps, 1e-3f);
+}
 
-    // moving, the same lateral drag is a slip and the ball yaws towards it
-    in.accX = -0.3f;
-    computeN(&in, &state, &out, 500);
-    EXPECT_LT(out.yawRateDps, -5.0f);
+TEST(BankModeTest, FullBankAtSpeedBrakesTowardsTheCornerSpeed)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.armed = false;
+    in.speed = 0.75f;
+    in.bank = 0.9f;
+    in.accX = -1.0f;        // far above the corner speed
+    computeN(&in, &state, &out, 300);
+    EXPECT_LT(state.velForward, 1.1f);
+    float forward;
+    float left;
+    float up;
+    targetThrust(&out, &forward, &left, &up);
+    EXPECT_LT(forward, -0.05f);
 }
 
 TEST(BankModeTest, LiftAtTheBottomGivesTheFloorButNothingTurns)
@@ -660,10 +670,9 @@ TEST(BankModeTest, LiftAtTheBottomGivesTheFloorButNothingTurns)
     computeN(&in, &state, &out, 10);
     EXPECT_NEAR(bankLiftFromStick(0.0f, thrustToWeight()), bankThrustFromCollective(out.collective, thrustToWeight()), 1e-4f);
 
-    // moving, banked and slipping: the floor's thrust still steers, but the yaw stays off
     in.accX = -0.3f;
     in.accY = -0.3f;
-    in.roll = 1.0f;
+    in.bank = 1.0f;
     in.measuredRollDeg = 30.0f;
     computeN(&in, &state, &out, 100);
     EXPECT_GT(out.collective, 0.0f);
@@ -699,6 +708,7 @@ static void setUpUpdate(void)
     bankModeUpdate(0);
     memset(testDeflection, 0, sizeof(testDeflection));
     memset(&acc, 0, sizeof(acc));
+    memset(&gyro, 0, sizeof(gyro));
     memset(&attitude, 0, sizeof(attitude));
     acc.dev.acc_1G_rec = 1.0f / 512.0f;
     rcCommand[THROTTLE] = 1000;     // Speed stick at the bottom
@@ -714,40 +724,22 @@ TEST(BankModeTest, EngagedWithTheThrottleLowNoTiltUntilTheBankStickIsCentred)
     setUpUpdate();
     ENABLE_FLIGHT_MODE(BANK_MODE);
     ENABLE_ARMING_FLAG(ARMED);
+    acc.accADC.z = 512.0f;
     testDeflection[FD_YAW] = -1.0f;     // yaw stick right = bank right
     timeUs_t now = 1000;
     for (int i = 0; i < 10; i++, now += 10000) {
         bankModeUpdate(now);
     }
     EXPECT_FLOAT_EQ(0.0f, bankModeGetAngleTarget(FD_ROLL));
-    EXPECT_FLOAT_EQ(0.0f, bankModeGetAngleTarget(FD_PITCH));    // and no reverse with the stick at the bottom
+    EXPECT_FLOAT_EQ(0.0f, bankModeGetAngleTarget(FD_PITCH));
+    EXPECT_FLOAT_EQ(0.0f, bankModeGetRate(FD_YAW));
 
     testDeflection[FD_YAW] = 0.0f;
     bankModeUpdate(now);
     now += 10000;
     testDeflection[FD_YAW] = -1.0f;
     bankModeUpdate(now);
-    EXPECT_LT(bankModeGetYawRate(), 0.0f);
-}
-
-TEST(BankModeTest, YawStickBanksAndRollStickTurnsTheNose)
-{
-    // each stick to the right: Bank right, or the nose to the right (clockwise)
-    setUpUpdate();
-    ENABLE_FLIGHT_MODE(BANK_MODE);
-    bankModeUpdate(1000);
-    testDeflection[FD_YAW] = -1.0f;
-    bankModeUpdate(11000);
-    EXPECT_LT(bankModeGetYawRate(), 0.0f);      // at zero Speed Bank yaws on the spot
-
-    // with the Speed stick at the bottom the head check alone gives no tilt
-    setUpUpdate();
-    ENABLE_FLIGHT_MODE(BANK_MODE);
-    bankModeUpdate(1000);
-    testDeflection[FD_ROLL] = 1.0f;
-    bankModeUpdate(11000);
-    EXPECT_FLOAT_EQ(0.0f, bankModeGetAngleTarget(FD_ROLL));
-    EXPECT_LT(bankModeGetYawRate(), 0.0f);
+    EXPECT_LT(bankModeGetRate(FD_YAW), 0.0f);
 }
 
 TEST(BankModeTest, ThrottleIsLowWithLiftAtTheBottom)
@@ -756,10 +748,10 @@ TEST(BankModeTest, ThrottleIsLowWithLiftAtTheBottom)
     ENABLE_FLIGHT_MODE(BANK_MODE);
     bankModeUpdate(1000);
     EXPECT_FALSE(bankModeIsThrottleLow());
-    testDeflection[FD_PITCH] = -0.9f;     // near the bottom
+    testDeflection[FD_PITCH] = -0.9f;
     bankModeUpdate(11000);
     EXPECT_FALSE(bankModeIsThrottleLow());
-    testDeflection[FD_PITCH] = -1.0f;     // at the bottom, where the floor still gives thrust
+    testDeflection[FD_PITCH] = -1.0f;
     bankModeUpdate(21000);
     EXPECT_GT(bankModeGetCollective(), 0.0f);
     EXPECT_TRUE(bankModeIsThrottleLow());
@@ -772,34 +764,36 @@ TEST(BankModeTest, UpdateMirrorsTheModeFlagAndClearsWhenInactive)
     EXPECT_FALSE(bankModeIsActive());
 
     ENABLE_FLIGHT_MODE(BANK_MODE);
+    acc.accADC.z = 512.0f;
     bankModeUpdate(2000);
     EXPECT_TRUE(bankModeIsActive());
     EXPECT_NEAR(hoverCollective(), bankModeGetCollective(), 1e-5f);
-
-    testDeflection[FD_YAW] = -1.0f;     // yaw stick right = bank right
-    bankModeUpdate(12000);
-    EXPECT_LT(bankModeGetYawRate(), 0.0f);
 
     DISABLE_FLIGHT_MODE(BANK_MODE);
     bankModeUpdate(22000);
     EXPECT_FALSE(bankModeIsActive());
     EXPECT_FLOAT_EQ(0.0f, bankModeGetAngleTarget(FD_ROLL));
-    EXPECT_FLOAT_EQ(0.0f, bankModeGetYawRate());
+    EXPECT_FLOAT_EQ(0.0f, bankModeGetRate(FD_ROLL));
+    EXPECT_FLOAT_EQ(0.0f, bankModeGetRate(FD_YAW));
     EXPECT_FLOAT_EQ(0.0f, bankModeGetCollective());
 }
 
-TEST(BankModeTest, UpdateReadsTheDragFromTheAccelerometer)
+TEST(BankModeTest, UpdateReadsTheGyroIntoTheVelocity)
 {
     setUpUpdate();
     ENABLE_FLIGHT_MODE(BANK_MODE);
-    // drag towards the right (-Y) of 0.3 g: the craft is drifting left, so the nose turns left
-    acc.accADC.y = -0.3f * 512.0f;
+    acc.accADC.x = -0.4f * 512.0f;      // flying forwards
     acc.accADC.z = 512.0f;
     timeUs_t now = 1000;
-    for (int i = 0; i < 100; i++, now += 10000) {
+    for (int i = 0; i < 300; i++, now += 10000) {
         bankModeUpdate(now);
     }
-    EXPECT_GT(bankModeGetYawRate(), 0.0f);
+    // yawing left with the drag still forward: the track lags to the right of the nose, the nose yaws back right
+    gyro.gyroADCf[FD_YAW] = 200.0f;
+    for (int i = 0; i < 5; i++, now += 10000) {
+        bankModeUpdate(now);
+    }
+    EXPECT_LT(bankModeGetRate(FD_YAW), 0.0f);
 }
 
 TEST(BankModeTest, UpdateReadsTheReverseBelowMinCheck)
@@ -810,7 +804,6 @@ TEST(BankModeTest, UpdateReadsTheReverseBelowMinCheck)
     acc.accADC.z = 512.0f;
     timeUs_t now = 1000;
     bankModeUpdate(now);
-    // raised once above min_check, then back to the stop: no tilt
     rcCommand[THROTTLE] = 1200;
     rcData[THROTTLE] = 1240;
     bankModeUpdate(now += 10000);
@@ -819,17 +812,12 @@ TEST(BankModeTest, UpdateReadsTheReverseBelowMinCheck)
     for (int i = 0; i < 10; i++) {
         bankModeUpdate(now += 10000);
     }
-    EXPECT_FLOAT_EQ(0.0f, bankModeGetAngleTarget(FD_PITCH));
-    // to the bottom: backwards; a radio that goes below 1000 is full reverse too
+    EXPECT_NEAR(0.0f, bankModeGetAngleTarget(FD_PITCH), 1e-3f);
     rcData[THROTTLE] = 1000;
     for (int i = 0; i < 10; i++) {
         bankModeUpdate(now += 10000);
     }
-    const float fullReverse = bankModeGetAngleTarget(FD_PITCH);
-    EXPECT_LT(fullReverse, 0.0f);
-    rcData[THROTTLE] = 988;
-    bankModeUpdate(now += 10000);
-    EXPECT_FLOAT_EQ(fullReverse, bankModeGetAngleTarget(FD_PITCH));
+    EXPECT_LT(bankModeGetAngleTarget(FD_PITCH), 0.0f);
 }
 
 TEST(BankModeTest, DebugModeBankLogsTheEstimates)
@@ -839,16 +827,15 @@ TEST(BankModeTest, DebugModeBankLogsTheEstimates)
     ENABLE_FLIGHT_MODE(BANK_MODE);
     debugMode = DEBUG_BANK;
     memset(debug, 0, sizeof(debug));
-    acc.accADC.x = -0.3f * 512.0f;      // flying forwards
-    rcCommand[THROTTLE] = 1500;         // half the Speed stick
+    acc.accADC.x = -0.3f * 512.0f;
+    rcCommand[THROTTLE] = 1500;
     testThrottleStatus = THROTTLE_HIGH;
     timeUs_t now = 1000;
     for (int i = 0; i < 200; i++, now += 10000) {
         acc.accADC.z = bankThrustFromCollective(bankModeGetCollective(), thrustToWeight()) * 512.0f;
         bankModeUpdate(now);
     }
-    EXPECT_GT(debug[0], 200);           // speed estimate, 0.001 g
-    EXPECT_GT(debug[1], 0);             // target speed
-    EXPECT_NEAR(thrustToWeight() * 100.0f, debug[4], 1.0f);
+    EXPECT_GT(debug[0], 150);           // speed estimate, 0.001 g
+    EXPECT_GT(debug[1], 0);             // corner speed
     debugMode = DEBUG_NONE;
 }

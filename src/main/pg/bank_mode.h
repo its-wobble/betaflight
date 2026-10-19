@@ -30,8 +30,8 @@
 typedef struct bankModeConfig_s {
     uint16_t thrustToWeight;        // full-collective thrust / weight, x100; 1 / collective^1.5 in a hover
     uint16_t midSpeed;              // speed at the centre of the Speed stick, x100 g of drag
-    uint8_t headCheckRange;         // degrees
-    uint8_t lookTurn;               // percent, 0 = look dot, 100 = look turn
+    uint16_t dragRate;              // rotor drag per speed at 1 g of thrust, x100 1/s: g of drag = speed * dragRate / g
+    uint16_t cornerRate;            // deg/s, the track's turn rate full Bank slows the craft down for
 } bankModeConfig_t;
 
 PG_DECLARE(bankModeConfig_t, bankModeConfig);

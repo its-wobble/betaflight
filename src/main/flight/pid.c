@@ -46,7 +46,6 @@
 #include "fc/runtime_config.h"
 
 #include "flight/autopilot.h"
-#include "flight/bank_mode.h"
 #include "flight/gps_rescue.h"
 #include "flight/imu.h"
 #include "flight/launch_wing.h"
@@ -611,14 +610,6 @@ STATIC_UNIT_TESTED FAST_CODE_NOINLINE float pidLevel(int axis, const pidProfile_
     }
 #endif
 
-#ifdef USE_BANK_MODE
-    if (FLIGHT_MODE(BANK_MODE)) {
-        // the bank mode logic has already limited and shaped its angle targets
-        angleTarget = bankModeGetAngleTarget(axis);
-        angleLimit = 85.0f;
-    }
-#endif
-
 #if defined(USE_WING) && defined(USE_LAUNCH_WING)
     if (FLIGHT_MODE(LAUNCH_MODE)) {
         // angleTarget currently holds the pilot's own stick-derived target, so
@@ -645,16 +636,9 @@ STATIC_UNIT_TESTED FAST_CODE_NOINLINE float pidLevel(int axis, const pidProfile_
     // minimise cross-axis wobble due to faster yaw responses than roll or pitch, and make co-ordinated yaw turns
     // by compensating for the effect of yaw on roll while pitched, and on pitch while rolled
     // earthRef code here takes about 76 cycles, if conditional on angleEarthRef it takes about 100.  sin_approx costs most of those cycles.
-    float crossAngle = pidRuntime.angleTarget[axis == FD_ROLL ? FD_PITCH : FD_ROLL];
-#ifdef USE_BANK_MODE
-    if (FLIGHT_MODE(BANK_MODE)) {
-        // bank mode's yaw follows the measured bank, so share it out by the measured attitude, not the targets
-        crossAngle = attitude.raw[axis == FD_ROLL ? FD_PITCH : FD_ROLL] * 0.1f;
-    }
-#endif
-    float sinAngle = sin_approx(DEGREES_TO_RADIANS(crossAngle));
+    float sinAngle = sin_approx(DEGREES_TO_RADIANS(pidRuntime.angleTarget[axis == FD_ROLL ? FD_PITCH : FD_ROLL]));
     sinAngle *= (axis == FD_ROLL) ? -1.0f : 1.0f; // must be negative for Roll
-    const float earthRefGain = FLIGHT_MODE(GPS_RESCUE_MODE | ALT_HOLD_MODE | BANK_MODE) ? 1.0f : pidRuntime.angleEarthRef;
+    const float earthRefGain = FLIGHT_MODE(GPS_RESCUE_MODE | ALT_HOLD_MODE) ? 1.0f : pidRuntime.angleEarthRef;
     angleRate += pidRuntime.angleYawSetpoint * sinAngle * earthRefGain;
     pidRuntime.angleTarget[axis] = angleTarget;  // set target for alternate axis to current axis, for use in preceding calculation
 
@@ -1125,9 +1109,6 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
 #if defined(USE_WING) && defined(USE_LAUNCH_WING)
                 || FLIGHT_MODE(LAUNCH_MODE)
 #endif
-#ifdef USE_BANK_MODE
-                || FLIGHT_MODE(BANK_MODE)
-#endif
                 ;
     levelMode_e levelMode;
     if (FLIGHT_MODE(ANGLE_MODE | HORIZON_MODE | GPS_RESCUE_MODE | LAUNCH_MODE)) {
@@ -1318,16 +1299,10 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
                 // if earth referencing is requested, attenuate yaw axis setpoint when pitched or rolled
                 // and send yawSetpoint to Angle code to modulate pitch and roll
                 // code cost is 107 cycles when earthRef enabled, 20 otherwise, nearly all in cos_approx
-                const float earthRefGain = FLIGHT_MODE(GPS_RESCUE_MODE | BANK_MODE) ? 1.0f : pidRuntime.angleEarthRef;
+                const float earthRefGain = FLIGHT_MODE(GPS_RESCUE_MODE) ? 1.0f : pidRuntime.angleEarthRef;
                 if (earthRefGain) {
                     pidRuntime.angleYawSetpoint = currentPidSetpoint;
                     float maxAngleTargetAbs = earthRefGain * fmaxf( fabsf(pidRuntime.angleTarget[FD_ROLL]), fabsf(pidRuntime.angleTarget[FD_PITCH]) );
-#ifdef USE_BANK_MODE
-                    if (FLIGHT_MODE(BANK_MODE)) {
-                        // shared out by the measured attitude, as in pidLevel()
-                        maxAngleTargetAbs = MAX(ABS(attitude.raw[FD_ROLL]), ABS(attitude.raw[FD_PITCH])) * 0.1f;
-                    }
-#endif
                     maxAngleTargetAbs *= (FLIGHT_MODE(HORIZON_MODE)) ? horizonLevelStrength : 1.0f;
                     // reduce compensation whenever Horizon uses less levelling
                     currentPidSetpoint *= cos_approx(DEGREES_TO_RADIANS(maxAngleTargetAbs));

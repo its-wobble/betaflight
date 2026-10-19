@@ -672,8 +672,8 @@ FAST_CODE void processRcCommand(void)
 
 #ifdef USE_BANK_MODE
             if (FLIGHT_MODE(BANK_MODE)) {
-                // bank mode sets roll and pitch as angle targets in pidLevel(), and the yaw rate itself
-                angleRate = (axis == FD_YAW) ? bankModeGetYawRate() : 0.0f;
+                // bank mode sets all three rates itself
+                angleRate = bankModeGetRate(axis);
             }
 #endif
 

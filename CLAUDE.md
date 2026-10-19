@@ -8,7 +8,7 @@ Betaflight is C flight-controller firmware for STM32, AT32, APM32, ESP32 and RP2
 
 This fork (its-wobble/betaflight) adds a new flight mode, **bank**. The spec, decisions and open points are in [project_plan.md](project_plan.md). Snapshots, parked experiments, the owner's hardware decisions and past session plans are in [project-docs/](project-docs/README.md): read its README at the start of bank mode work. Use the owner's terms from its "Terms" section: **Speed**, **Lift** and **Bank** are the controls, in the world frame; **thrust** is the props' force, in the drone frame.
 
-The mode lives in `src/main/flight/bank_mode.{c,h}` and `src/main/pg/bank_mode.{c,h}`, gated by `USE_BANK_MODE` (`target/common_post.h`), with hooks in `fc/rc.c`, `fc/core.c`, `flight/pid.c`, `flight/mixer.c`, `msp/msp_box.c`, `osd/osd_elements.c` and `cli/settings.c`. It is a personal project that may be upstreamed, so develop it the Betaflight way (see Conventions).
+The mode lives in `src/main/flight/bank_mode.{c,h}` and `src/main/pg/bank_mode.{c,h}`, gated by `USE_BANK_MODE` (`target/common_post.h`), with hooks in `fc/rc.c`, `fc/core.c`, `flight/pid.c` (none on `bank-race-rewrite`, where the mode flies on rates), `flight/mixer.c`, `msp/msp_box.c`, `osd/osd_elements.c` and `cli/settings.c`. It is a personal project that may be upstreamed, so develop it the Betaflight way (see Conventions).
 
 - **Don't commit** in this repo or the sim unless the owner asks. They review changes first.
 - **Test every bank mode change in the simulator** with the `bank-sim-loop` skill: `make test_bank_unittest`, then `npm run bank:cycle` in `$SIM_DIR` (`/home/devpod/WebFPVSimulator`). The owner's guide to flying it by hand is `$SIM_DIR/BANK-MODE.md`.
