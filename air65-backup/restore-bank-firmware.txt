@@ -174,7 +174,7 @@ battery_profile 0
 aux 4 59 2 1700 2100 0 0
 set debug_mode = BANK
 set blackbox_sample_rate = 1/16
-set bank_mid_speed = 10
+set bank_mid_speed = 50
 set runaway_takeoff_prevention = OFF
 
 # end the command batch

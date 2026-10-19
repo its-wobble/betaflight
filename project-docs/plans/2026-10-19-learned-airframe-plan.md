@@ -1,4 +1,6 @@
-# Plan: learn the airframe in flight, no airframe settings (planned, not started)
+# Plan: learn the airframe in flight, no airframe settings (implemented 2026-10-19)
+
+Implemented the same day; what was built, where it differs from this plan (the gates on vertical speed, the step limit, the debug slots) and the measurements are in [project_plan.md](../../project_plan.md), "Learned airframe". The owner's decisions on the two open questions at the end: relearn every power-up, no OSD element for now. Part 3 (learning T/W) was built, then dropped at the owner's request as too much code for little gain: T/W is a fixed 5.70 with the trim on top.
 
 Written 2026-10-19 for a later session. It builds on the race rewrite (branch `bank-race-rewrite`, [project_plan.md](../../project_plan.md) "Race rewrite"). Read that section and `flight/bank_mode.c` first.
 

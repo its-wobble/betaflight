@@ -80,20 +80,26 @@
  * the axis between them, and the heading's turn rate is shared out over the body axes, so no Euler angle is held and
  * a bank near 90 degrees is no different from any other.
  *
- * Velocity is estimated in the heading frame, in g of drag (the rotor drag at 1 g of thrust), so it needs no m/s
- * calibration: the accelerometer integrated in three axes (dv/dt = bank_drag_rate * (specific force - gravity)), and
- * corrected in the rotor plane by the rotor drag the accelerometer measures there, so a climb or a sink across tilted
- * rotors is not read as speed or slip. The same bank_drag_rate turns a sideways force into a turn rate,
- * omega = bank_drag_rate * force / speed, which the yaw feeds forward; the slip, the angle from the nose to the track,
- * closes the loop.
+ * Velocity is estimated in the heading frame, in g of drag (the rotor drag at 1 g of thrust): the accelerometer
+ * integrated in three axes (dv/dt = D * (specific force - gravity)), and corrected in the rotor plane by the rotor drag
+ * the accelerometer measures there, so a climb or a sink across tilted rotors is not read as speed or slip. The same
+ * D turns a sideways force into a turn rate, omega = D * force / speed, which the yaw feeds forward; the slip, the
+ * angle from the nose to the track, closes the loop.
  *
  * Lift is held by the collective at the measured tilt, from a thrust model that the accelerometer trims along the
  * thrust axis, less the lift the rotor drag gives pitched at speed, plus an integral on the measured vertical force
  * for what both miss. The force budget follows the trim slowly, so near the edge of the envelope Lift keeps its
  * thrust and the forward tilt gives way.
  *
+ * Nothing about the airframe is set. The thrust model starts from BANK_THRUST_TO_WEIGHT, set high on purpose, since
+ * the trim corrects a model that gives too much thrust fully and one that gives too little only partly. The drag rate
+ * D (g of drag = D * airspeed / g) is learned in flight from a default and kept until power-off: wherever the speed
+ * changes, the change in the drag reading is D times the specific force integrated over the same time, fitted by least
+ * squares over windows of BANK_LEARN_WINDOW_S. With D known, bank_mid_speed is in m/s.
+ *
  * Limitations:
  *   - the drag only sees speed through the rotors: little signal at low speed, and accelerometer bias reads as speed
+ *   - the speed is airspeed, and D the average over the speeds flown (the airframe's drag grows as speed squared)
  *   - the vertical velocity is only seen through the drag while tilted, and level it decays to zero
  *   - Lift is a force: nothing holds the height or the vertical speed
  */
@@ -139,8 +145,22 @@
 #define BANK_TRIM_LEAK_S        1.0f
 #define BANK_TRIM_INFLOW_FLOOR  0.1f    // g of drag
 #define BANK_BUDGET_HZ          1.0f    // the thrust the vector is shared out of follows the trim this slowly
+#define BANK_GRAVITY_MSS        9.80665f
+#define BANK_LEARN_WINDOW_S     0.4f    // long against the filter lag and the noise, short against drift and gusts
+#define BANK_LEARN_FILTER_HZ    5.0f    // on both the force and the drag, so their lags match
+#define BANK_LEARN_FORGET_S     20.0f   // of accepted windows
+#define BANK_LEARN_EXCITATION   0.3f    // g s, the least change of speed a window learns from
+#define BANK_LEARN_PRIOR        0.05f   // g^2 s^2, the default's weight: half a window at the least change of speed
+#define BANK_LEARN_MAX_STEP     2.0f    // the most one window moves D, as a factor
+#define BANK_LEARN_MAX_VERTICAL 0.2f    // g, no learning while the vertical speed changes faster than this
+#define BANK_LEARN_MAX_CLIMB    0.1f    // g s, about 1 m/s: nor while climbing or sinking faster than this
+#define BANK_LEARN_CLIMB_LEAK_S 5.0f    // the vertical speed from the vertical force forgets an accelerometer bias
+#define BANK_LEARN_MIN_TILT_COS 0.259f  // cos(75 deg)
+#define BANK_DRAG_RATE_MIN      0.1f    // 1/s
+#define BANK_DRAG_RATE_MAX      3.0f
 
 static bankState_t bankState;
+static bankLearned_t bankLearned;           // never cleared: what the mode learns lasts until power-off
 
 static FAST_DATA_ZERO_INIT bankOutputs_t bankOutputs;     // read by the PID loop and the mixer
 
@@ -352,12 +372,77 @@ STATIC_UNIT_TESTED float bankScaleTrimWithInflow(float trim, float inflow, float
     return 1.0f - (1.0f - trim) * share;
 }
 
-STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankInputs_t *in, bankState_t *state, bankOutputs_t *out)
+static void bankStartLearnWindow(bankLearned_t *learned, bool ok)
+{
+    learned->windowForce[0] = 0.0f;
+    learned->windowForce[1] = 0.0f;
+    learned->windowDrag[0] = learned->drag[0];
+    learned->windowDrag[1] = learned->drag[1];
+    learned->windowTime = 0.0f;
+    learned->windowOk = ok;
+}
+
+// D by least squares: over each window the change in the drag reading (g of drag) is D times the specific force
+// integrated (g s), both horizontal in the heading frame and both filtered alike. In steady flight both are zero and
+// nothing is learned; in a steady turn both turn with the track. learn: the conditions for it hold now.
+STATIC_UNIT_TESTED void bankLearnDragRate(bankLearned_t *learned, float forceForward, float forceLeft, float dragForward, float dragLeft,
+    float headingStep, bool learn, bool restart, float dt)
+{
+    if (restart) {
+        learned->force[0] = forceForward;
+        learned->force[1] = forceLeft;
+        learned->drag[0] = dragForward;
+        learned->drag[1] = dragLeft;
+        bankStartLearnWindow(learned, false);
+        return;
+    }
+    // all of it turns with the heading frame, as the velocity does
+    bankRotate(&learned->force[0], &learned->force[1], -headingStep);
+    bankRotate(&learned->drag[0], &learned->drag[1], -headingStep);
+    bankRotate(&learned->windowForce[0], &learned->windowForce[1], -headingStep);
+    bankRotate(&learned->windowDrag[0], &learned->windowDrag[1], -headingStep);
+    const float gain = pt1FilterGain(BANK_LEARN_FILTER_HZ, dt);
+    learned->force[0] += gain * (forceForward - learned->force[0]);
+    learned->force[1] += gain * (forceLeft - learned->force[1]);
+    learned->drag[0] += gain * (dragForward - learned->drag[0]);
+    learned->drag[1] += gain * (dragLeft - learned->drag[1]);
+    learned->windowForce[0] += learned->force[0] * dt;
+    learned->windowForce[1] += learned->force[1] * dt;
+    learned->windowOk = learned->windowOk && learn;
+    learned->windowTime += dt;
+    if (learned->windowTime < BANK_LEARN_WINDOW_S) {
+        return;
+    }
+
+    const float forward = learned->windowForce[0];
+    const float left = learned->windowForce[1];
+    const float excitation = sq(forward) + sq(left);
+    const float product = (learned->drag[0] - learned->windowDrag[0]) * forward + (learned->drag[1] - learned->windowDrag[1]) * left;
+    // a window that alone says a D out of range is no airframe's (an impact, say), and is left out
+    const bool plausible = product >= BANK_DRAG_RATE_MIN * excitation && product <= BANK_DRAG_RATE_MAX * excitation;
+    if (learned->windowOk && excitation >= sq(BANK_LEARN_EXCITATION) && plausible) {
+        const float forget = 1.0f - learned->windowTime / BANK_LEARN_FORGET_S;
+        learned->dragNum = forget * learned->dragNum + product;
+        learned->dragDen = forget * learned->dragDen + excitation;
+        const float dragRate = learned->dragRate;
+        const float fitted = constrainf(learned->dragNum / learned->dragDen,
+            dragRate / BANK_LEARN_MAX_STEP, dragRate * BANK_LEARN_MAX_STEP);
+        learned->dragRate = constrainf(fitted, BANK_DRAG_RATE_MIN, BANK_DRAG_RATE_MAX);
+    }
+    bankStartLearnWindow(learned, learn);
+}
+
+STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankInputs_t *in, bankState_t *state, bankLearned_t *learned, bankOutputs_t *out)
 {
     const bool restart = in->dt <= 0.0f || in->dt > BANK_MAX_DT_S;
     const float dt = restart ? BANK_FALLBACK_DT_S : in->dt;
-    const float thrustToWeight = config->thrustToWeight / 100.0f;
-    const float dragRate = config->dragRate / 100.0f;
+    if (learned->dragRate == 0.0f) {
+        learned->dragRate = BANK_DRAG_RATE_DEFAULT;
+        learned->dragNum = BANK_DRAG_RATE_DEFAULT * BANK_LEARN_PRIOR;
+        learned->dragDen = BANK_LEARN_PRIOR;
+    }
+    const float thrustToWeight = BANK_THRUST_TO_WEIGHT;
+    const float dragRate = learned->dragRate;
     if (state->thrustTrim == 0.0f || !in->armed) {
         state->thrustTrim = 1.0f;
         state->budgetTrim = 1.0f;
@@ -402,11 +487,12 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     const float dragScale = state->collective > 0.0f ? 1.0f / sqrtf(fmaxf(thrust, BANK_DRAG_MIN_THRUST)) : 1.0f;
     const float dragX = -in->accX * dragScale;
     const float dragY = -in->accY * dragScale;
+    const float headingStep = restart ? 0.0f
+        : bankHeadingRate(DEGREES_TO_RADIANS(in->gyroPitchDps), DEGREES_TO_RADIANS(in->gyroYawDps), roll, pitch) * dt;
     if (restart) {
         bankLevelVelocity(dragX, dragY, roll, pitch, &state->velForward, &state->velLeft);
         state->velUp = 0.0f;
     } else {
-        const float headingStep = bankHeadingRate(DEGREES_TO_RADIANS(in->gyroPitchDps), DEGREES_TO_RADIANS(in->gyroYawDps), roll, pitch) * dt;
         bankRotate(&state->velForward, &state->velLeft, -headingStep);
         state->velForward += dragRate * forceForward * dt;
         state->velLeft += dragRate * forceLeft * dt;
@@ -477,7 +563,7 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     const float thrustLift = lift - state->dragLift + state->liftIntegral;
     const float liftForTilt = fmaxf(thrustLift, BANK_MIN_LIFT);
     const float bankAngle = bankStick * DEGREES_TO_RADIANS(BANK_MAX_BANK_DEG) * turnShare;
-    const float midSpeed = config->midSpeed / 100.0f;
+    const float midSpeed = config->midSpeed / 10.0f * dragRate / BANK_GRAVITY_MSS;  // m/s to g of drag
     const float horizontal = sqrtf(fmaxf(sq(availableThrust) - sq(liftForTilt), 0.0f));
     const float fullBankForce = sqrtf(fmaxf(sq(availableThrust) - sq(BANK_LIFT_YIELD * liftForTilt), 0.0f));
     const float cornerSpeed = bankCornerSpeed(fullBankForce, dragRate, DEGREES_TO_RADIANS(config->cornerRate));
@@ -536,8 +622,20 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     out->collective = collective;
     out->throttleLow = liftStick <= 0.0f || collective <= 0.0f;
 
+    // learning D, for the next update, wherever the speed changes: clearly flying, the rotors short of edge-on, and the
+    // vertical speed small and steady, as a climb or sink across the rotors reads as speed. This vertical speed is from
+    // the vertical force alone, as the velocity estimate's depends on D.
+    state->climbRate = restart ? 0.0f
+        : state->climbRate + (state->verticalForce - 1.0f - state->climbRate / BANK_LEARN_CLIMB_LEAK_S) * dt;
+    const bool level = fabsf(state->climbRate) < BANK_LEARN_MAX_CLIMB && fabsf(state->verticalForce - 1.0f) < BANK_LEARN_MAX_VERTICAL;
+    float dragForward;
+    float dragLeft;
+    bankLevelVelocity(dragX, dragY, roll, pitch, &dragForward, &dragLeft);
+    const bool learnDrag = in->armed && !in->motorsSaturated && moving && tiltCos > BANK_LEARN_MIN_TILT_COS && level;
+    bankLearnDragRate(learned, forceForward, forceLeft, dragForward, dragLeft, headingStep, learnDrag, restart, dt);
+
     DEBUG_SET(DEBUG_BANK, 0, lrintf(speed * 1000.0f));                                   //!< Speed Estimate [unit:0.001g]
-    DEBUG_SET(DEBUG_BANK, 1, lrintf(cornerSpeed * 1000.0f));                             //!< Corner Speed [unit:0.001g]
+    DEBUG_SET(DEBUG_BANK, 1, lrintf(learned->dragRate * 1000.0f));                       //!< Learned Drag Rate [unit:0.001]
     DEBUG_SET(DEBUG_BANK, 2, lrintf(state->thrustTrim * 1000.0f));                       //!< Thrust Trim [unit:0.001]
     DEBUG_SET(DEBUG_BANK, 3, lrintf(forward * 1000.0f));                                 //!< Forward Force [unit:0.001g]
     DEBUG_SET(DEBUG_BANK, 4, lrintf(right * 1000.0f));                                   //!< Sideways Force [unit:0.001g]
@@ -584,7 +682,7 @@ void bankModeUpdate(timeUs_t currentTimeUs)
         .dt = dt,
         .motorsSaturated = getMotorMixRange() >= 1.0f,
     };
-    bankCompute(bankModeConfig(), &inputs, &bankState, &bankOutputs);
+    bankCompute(bankModeConfig(), &inputs, &bankState, &bankLearned, &bankOutputs);
 }
 
 bool bankModeIsActive(void)
@@ -609,7 +707,7 @@ float bankModeGetCollective(void)
 
 float bankModeGetThrustToWeight(void)
 {
-    return bankModeConfig()->thrustToWeight / 100.0f;
+    return BANK_THRUST_TO_WEIGHT;
 }
 
 // The bottom of the throttle stick is the Speed stick's stop, not idle, so the throttle is low with the Lift stick at

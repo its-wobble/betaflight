@@ -1240,9 +1240,7 @@ const clivalue_t valueTable[] = {
 
 #ifdef USE_BANK_MODE
 // PG_BANK_MODE_CONFIG
-    { "bank_thrust_to_weight",      VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 110, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, thrustToWeight) },
-    { "bank_mid_speed",             VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 5, 500 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, midSpeed) },
-    { "bank_drag_rate",             VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 5, 500 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, dragRate) },
+    { "bank_mid_speed",             VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 10, 600 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, midSpeed) },
     { "bank_corner_rate",           VAR_UINT16 | MASTER_VALUE, .config.minmaxUnsigned = { 30, 1000 }, PG_BANK_MODE_CONFIG, offsetof(bankModeConfig_t, cornerRate) },
 #endif // USE_BANK_MODE
 

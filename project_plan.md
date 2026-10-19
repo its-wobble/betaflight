@@ -26,10 +26,10 @@ Agreed with the owner on 2026-10-16. Use these words, in these meanings, when ta
 So with Lift at 1 g and Speed pushed up, the craft pitches forward and the thrust rises by 1 / cos θ so that Lift stays at 1 g. The same formula holds at every Speed, Lift and Bank.
 
 **Other words used in this plan and in `bank_mode.c`.**
-- **Collective**: the command to the motors, 0 to 1, that sets the thrust (the same for all motors before the attitude loop adds its differences). The mode turns a thrust into a collective with the thrust curve `thrust = bank_thrust_to_weight * collective^1.5`.
-- **Thrust to weight** (T/W, `bank_thrust_to_weight`): the thrust at full collective, in multiples of the weight. Fixed by a setting, measured in a hover.
+- **Collective**: the command to the motors, 0 to 1, that sets the thrust (the same for all motors before the attitude loop adds its differences). The mode turns a thrust into a collective with the thrust curve `thrust = T/W * collective^1.5`.
+- **Thrust to weight** (T/W): the thrust at full collective, in multiples of the weight. Since 2026-10-19 the fixed constant `BANK_THRUST_TO_WEIGHT` (5.70), with the thrust trim correcting it in flight (see "Learned airframe"); it was the setting `bank_thrust_to_weight`, measured in a hover.
 - **Thrust trim**: a factor on the modelled thrust, measured in flight from the accelerometer's vertical force against the Lift asked for. Real props make more or less thrust per collective than the fixed model (more when braking into the air, much less in fast forward flight), and the trim corrects for that, so the Lift asked for is the Lift the craft gets. (A version without it was tried on 2026-10-18 and parked, see "No thrust trim".)
-- **g of drag**: the unit of the speed estimate. The rotor drag, in g, the craft would have at that speed at 1 g of thrust. In steady flight it is the forward force that holds the speed, which is why no m/s calibration is needed. On the simulator's five inch 1.0 g of drag is about 40 m/s.
+- **g of drag**: the unit of the speed estimate. The rotor drag, in g, the craft would have at that speed at 1 g of thrust. In steady flight it is the forward force that holds the speed. It is D × airspeed ÷ g, and since 2026-10-19 the mode learns D in flight, so `bank_mid_speed` is in m/s. On the simulator's five inch 1.0 g of drag is about 40 m/s.
 - **Direction of travel** (track, travel heading): the direction the craft moves in the horizontal plane. Speed is along it, Bank curves it, and the head check offsets the nose from it.
 - **Look dot** and **look turn** (owner, 2026-10-17): where the nose points in a turn. Look dot is along the direction of travel, like a car on a banked track. Look turn is into the turn, along the ground-referenced direction of the forward and turning forces the sticks ask for, like a drifting car (today taken from the sticks, `atan2(Bank, Speed)`, see "Looking into the turn"). The two differ only by a yaw offset, so `bank_look_turn` (0 to 100 %) scales it: 0 is look dot, 100 is look turn. The thrust in the world frame, and so the track, is the same at any value; only what the firmware measures changes (see "Held full banks", "Still true" (1)).
 - **The ball**: the sideways force the accelerometer measures in the direction of travel, like the ball of an aircraft's turn-and-slip indicator. Centred, the turn is coordinated: the nose follows the track and the craft neither slips nor skids. The yaw is driven to keep it centred.
@@ -39,9 +39,9 @@ Mode 2 stick mapping (left and right swapped back on 2026-10-18 by the owner: Ba
 
 | Stick | Channel | Function |
 |---|---|---|
-| Left U/D | throttle | **Speed**, not raw throttle. Lower half = a speed: bottom = zero speed (hard brake, and the pose for arming) up to `bank_mid_speed` (default 0.50 g of drag, about 20 m/s on the five inch) at the centre; only the bottom third brakes a craft that is faster than the stick's speed, above it the craft coasts down by its own drag. Upper half = a forward force: a straight line from the force the centre gives to all the (trimmed) thrust allows at the top, so full stick tilts as far as the thrust allows, as at full throttle in acro, and both modes reach the same top speed. The force over the stick is continuous at the centre. Forward tilt is limited only by the thrust; tilting back to brake by 30 degrees, and only within what the bank leaves. The stop is a band over the first 10 % of the stick above `min_check`; below `min_check` a small reverse, once the stick has been raised since arming (see "Reverse"). Speed is estimated from rotor drag (accelerometer) and attitude, in g of drag; control is feedforward + P (gain 2, deadband 0.02 g, constants since the rewrite), so the bottom of the stick auto-brakes to a stop. Tilting forward also raises the thrust so Lift is unchanged |
+| Left U/D | throttle | **Speed**, not raw throttle. Lower half = a speed: bottom = zero speed (hard brake, and the pose for arming) up to `bank_mid_speed` (m/s ×10 since 2026-10-19, default 12 m/s; it was 0.50 g of drag, about 20 m/s on the five inch) at the centre; only the bottom third brakes a craft that is faster than the stick's speed, above it the craft coasts down by its own drag. Upper half = a forward force: a straight line from the force the centre gives to all the (trimmed) thrust allows at the top, so full stick tilts as far as the thrust allows, as at full throttle in acro, and both modes reach the same top speed. The force over the stick is continuous at the centre. Forward tilt is limited only by the thrust; tilting back to brake by 30 degrees, and only within what the bank leaves. The stop is a band over the first 10 % of the stick above `min_check`; below `min_check` a small reverse, once the stick has been raised since arming (see "Reverse"). Speed is estimated from rotor drag (accelerometer) and attitude, in g of drag; control is feedforward + P (gain 2, deadband 0.02 g, constants since the rewrite), so the bottom of the stick auto-brakes to a stop. Tilting forward also raises the thrust so Lift is unchanged |
 | Left L/R | yaw | **Bank** left/right = turn in the horizontal plane. The stick is the bank angle as a share of 90 degrees: full stick is as steep as the thrust reserve allows (since the rewrite there is no setting, and no limit from the yaw rate) |
-| Right U/D | pitch | **Lift**, the vertical force command. Bottom = a floor of 0.2 g (`BANK_LIFT_FLOOR`, since 2026-10-18, see "Zero Lift locks up"; it was 0 g, free fall), centre = 1 g (thrust balances weight), top = maximum thrust entirely as lift, whatever multiple of the weight that is. Linear below the centre; above it `1 + 0.8 x + (T/W - 1.8) x^3`, so both halves start at the same slope (0.8 g per half stick). The thrust-to-weight ratio is the fixed setting `bank_thrust_to_weight` (default 5.70, the simulator's five inch measured in a hover on a full pack), through a thrust curve `T = T/W * collective^1.5`; nothing is learnt in flight. The stick is a plain force with no vertical speed estimate: at the centre a climb or a sink carries on until the pilot stops it, and neither height nor vertical speed is held (the owner's decision, see "Lift stays a force") |
+| Right U/D | pitch | **Lift**, the vertical force command. Bottom = a floor of 0.2 g (`BANK_LIFT_FLOOR`, since 2026-10-18, see "Zero Lift locks up"; it was 0 g, free fall), centre = 1 g (thrust balances weight), top = maximum thrust entirely as lift, whatever multiple of the weight that is. Linear below the centre; above it `1 + 0.8 x + (T/W - 1.8) x^3`, so both halves start at the same slope (0.8 g per half stick). The thrust-to-weight ratio is the constant 5.70 (the simulator's five inch measured in a hover on a full pack), through a thrust curve `T = T/W * collective^1.5`, corrected in flight by the thrust trim (until 2026-10-19 it was the setting `bank_thrust_to_weight`). The stick is a plain force with no vertical speed estimate: at the centre a climb or a sink carries on until the pilot stops it, and neither height nor vertical speed is held (the owner's decision, see "Lift stays a force") |
 | Right L/R | roll | **head check**: yaw the nose away from the direction of travel *without* changing the direction of travel; springs back to neutral when the stick centres (unused on `bank-race-rewrite` for now, see "Race rewrite") |
 
 Design decisions so far:
@@ -69,7 +69,7 @@ The owner asked for the mode to be rebuilt from scratch as a racing mode: as goo
   The vector is turned into the heading frame by the slip, so a lagging nose never moves the force on the track.
 - **Flies on rates, like acro.** The mode sets all three body rates itself. The thrust axis is turned towards the vector about the axis between them (20/s per radian, at most 900 deg/s), and the heading's turn rate is shared over the body axes. ANGLE and HORIZON are switched off under BANK. The pid.c hooks are gone, and the rc.c hook sets all three rates.
 - **Velocity, estimated in 3D in g of drag.** The accelerometer is integrated in the heading frame (rotated by the gyro's Euler yaw rate) and corrected in the rotor plane by the rotor drag. A climb or sink across tilted rotors no longer reads as slip. The vertical estimate leaks at 0.2/s.
-- **One airframe constant, `bank_drag_rate`** (D, 1/s, default 0.40 for the sim's five inch), ties it all together:
+- **One airframe constant, `bank_drag_rate`** (D, 1/s, default 0.40 for the sim's five inch; learned in flight since 2026-10-19, see "Learned airframe"), ties it all together:
   - integration: dv/dt = D * specific force;
   - the track's turn rate: omega = D * sideways force / speed, fed forward to the yaw;
   - the corner speed.
@@ -108,10 +108,77 @@ The owner asked for the mode to be rebuilt from scratch as a racing mode: as goo
 
 **Open points.**
 - The steady slip in a half-Bank turn is about 7 degrees, with the nose lagging the track. The estimate reads about 1, so it is an estimator bias, probably the airframe's uneven drag, not a loop error.
-- `bank_drag_rate` must be found for the Air65. One way is to compare the debug speed with a known speed, or read it from the turn rate of a steady turn: omega * speed / force.
 - The attitude loop closes at the RC rate. That is fine at 250 Hz or more; at 50 Hz with a gain of 20/s it is marginal.
 - `bank_corner_rate` is untuned.
 - `DEBUG_BANK` fields: speed, corner speed, trim, forward force, sideways force, slip (0.1 deg), turn feedforward (0.1 deg/s), Lift - 1.
+
+## Learned airframe (2026-10-19, branch `bank-race-rewrite`)
+
+The owner asked for no airframe settings in bank mode. The design is in [project-docs/plans/2026-10-19-learned-airframe-plan.md](project-docs/plans/2026-10-19-learned-airframe-plan.md), and this session's plan is [2026-10-19-learned-airframe.md](project-docs/plans/2026-10-19-learned-airframe.md). Where this section and "Race rewrite" disagree, this one holds.
+
+**Owner decisions (2026-10-19).**
+- Relearn at every power-up: no flash writes.
+- No OSD element for now.
+- `bank_mid_speed` defaults to 12 m/s.
+
+**Design.** The drag rate D is learned; the thrust to weight is a fixed constant, `BANK_THRUST_TO_WEIGHT` (5.70), with the fast trim on top as before. Both constants are in `bank_mode.h` behind `#ifndef`, so a test build can override them.
+- **D, windowed least squares.** The learned D lives in `bankLearned`, which neither BANK switching off nor disarming clears. It starts from `BANK_DRAG_RATE_DEFAULT` (0.40). Over 0.4 s windows, the change in the drag reading is D times the specific force integrated over the same time.
+  - Both sides go through the same 5 Hz pt1 and are turned with the heading frame.
+  - Old windows are forgotten over 20 s of accepted windows. The default carries a weight of 0.05 g² s², about half a window.
+  - One window moves D by at most ×2 or ÷2, within 0.1 to 3 1/s. A window whose own D is outside that range is left out (an impact, say).
+  - **Gates:** armed, not saturated, moving, tilt under 75°, vertical force within 0.2 g of 1 g, and the climb rate under 0.1 g s (about 1 m/s).
+  - The climb rate is the vertical force over 1 g, integrated with a 5 s leak. It is not the velocity estimate's `velUp`: with D wrong, the drag correction pushes `velUp` during a punch, which blocked exactly the windows that would fix D.
+- **T/W stays fixed** (owner, 2026-10-19). 5.70 is high on purpose: the trim corrects a model with too much thrust fully, and one with too little only partly.
+  - A learner for it was built and tried the same day, then dropped as too much code for little gain. A base T/W took in the fast trim's long-run value at τ 5 s, gated on being airborne (a climb or sink past 0.2 m/s), near the hover, the vertical speed small, and Lift at least 1 g.
+  - It needed most of the gating: before it, the base walked from 4.8 to 6.7 in a 10 m/s sink in an owner log, and a landed craft with Lift under 1 g walked it up without end.
+  - It also changed none of the wrong-start results below. The trim already does the work.
+- **Settings.** `bank_mid_speed` is now m/s ×10 (default 120). `bank_thrust_to_weight` and `bank_drag_rate` are gone. PG version 7. Only pilot preferences are left: `bank_mid_speed` and `bank_corner_rate`.
+- **`DEBUG_BANK`.** Slot 1 is the learned D (0.001 1/s); it was the corner speed. The other slots are unchanged.
+
+**Results (sim, from the defaults).** `bank:cycle` passes, including the new rows: `learned_drag_rate_error` (band ±15 %, from the plan) and the whoop's sortie with the five inch's spec bands on its core rows. `bank:bench` gives 105 / 97 / 125 / 173 %. Bank's own reversal is 0.75 s and 6.3 m, against 0.78 s and 6.9 m before. The acro side moved because the entry speed did (below).
+
+| | five inch (1.62 g) | whoop (1 g) |
+|---|---|---|
+| learned D, end of sortie | 0.411 | 0.600 |
+| plant D (g × drag reading ÷ airspeed, steady cruise) | 0.406 | 0.665 |
+| error | 1.2 % | 9.7 % |
+| turn slip | 5.2° | 5.5° (29.8° with D fixed at 0.40) |
+
+**Wrong starts** (test builds, `BANK_EXTRA_DEF` in the sim's `build-wasm.sh`):
+
+| start | five inch | whoop |
+|---|---|---|
+| D 0.2 | all pass, D 0.408 | pass, D 0.632 |
+| D 1.0 | `cruise_speed_variation` 1.28 fails (the first cruise flies before D settles); D 0.429 | `learned_drag_rate_error` 15.5 % fails, D 0.602 |
+| T/W 3.0 | `turn_slip_deg` 14.9 fails (one too low is only partly corrected) | pass |
+| T/W 9.0 | pass | `cruise_speed_variation` 7.6 fails: the first cruise surges, with no steady cruise for the D row |
+
+Learning frozen at D = 0.2 turns both D rows red, and the turn slips 42°.
+
+**Found.**
+- **The first punch learns D high.** At 50° of pitch and low speed, each window says 0.49 to 0.53; turns say 0.38 to 0.40 and brakes 0.44 to 0.49. So the sortie's first cruise flies faster than before (23 to 24 m/s, against 20.2) until the turn brings D back. The plant's D depends on speed: 0.40 at 23 m/s, 0.46 at 27 m/s. That is the "average over the speeds flown" the plan expected.
+- **The owner's log `webfpv-bank-20261019-135840.csv`, flown airborne** (`bank:log -- --from 35 --replay --airborne`, new):
+  - D holds 0.40, then settles at 0.47 to 0.49 after the 25 m/s runs.
+  - The old firmware's replay touches the ground at 65 s and hits it at 101 s. This one touches at 65 s and pulls out at 103 s.
+  - Before the climb gate, D fell to 0.20 in climbs at 13 to 22 m/s.
+- **The owner's `webfpv-bank-20261019-153230.csv`**, flown on the learner build: the logged D went from 0.40 to 0.55, then 0.51 to 0.52, in runs at 25 to 32 m/s.
+- **The speed loop is feedforward + P,** so a cruise misses `bank_mid_speed`. This predates the change and shows more now that the setting is in m/s: the whoop cruises at 9.6 m/s for 12.
+
+**Open.**
+- The first punch over-learns D by about 20 %.
+- From a D start of 1.0 (2.5 times the five inch), the whoop's D ends just outside the band.
+- A T/W much further from 5.70 than the whoop's (about 4.9) is not covered: one too low turns badly, and one far too high surges the first cruise.
+
+**Sim changes** (`bank-race-rewrite` in the sim):
+- `bf_settings.c` follows the PG.
+- `build-wasm.sh` takes `BANK_EXTRA_DEF`.
+- `bank-check.js`:
+  - a whoop sortie, with real metres through `MICRO_SCALE`;
+  - learned-D rows;
+  - `--explore --whoop`;
+  - the turn rate unwrapped sample by sample (a 180° turn in the window read as 119 deg/s of miscoordination).
+- `bank-thresholds.json`: the new bands.
+- `bank-log.js`: `--airborne`, and the debug columns D and trim.
 
 ## Rewrite (2026-10-18)
 
@@ -277,9 +344,9 @@ Found while preparing it, open for the owner:
 - **Runaway takeoff and the airmode latch read the Speed stick** (found 2026-10-18; fixed in tuning round 2, not flown yet: under BANK `processRx()` now reads the collective as the throttle percent, for the airmode latch, runaway takeoff's deactivation and launch control): both use `calculateThrottlePercentAbs()` in `core.c`, the throttle stick's percent, not the collective. After a launch in BANK, flying Speed in the lower half, runaway takeoff never switches itself off (it needs the stick above 20 % with a stick deflected, or above 40 %), so a 75 ms PID-sum spike while rotating disarms in mid-air. Airmode never latches, so Lift at the bottom resets the I-term. The fix is to use the collective as the throttle percent under BANK for both. Until then the hardware procedure sets `runaway_takeoff_prevention = OFF` (`air65-backup/restore-bank-firmware.txt`, pasted per `air65-backup/flashing.md`); whether to turn it back on with the fix is the owner's call.
 - **Hooks never flown**: the throttle-low hooks in `core.c` and `failsafe.c` (I-term reset, PIDs at min throttle, auto-disarm, runaway takeoff, failsafe's landed timer) are not in the simulator, so the bench test and the first flights are their first run.
 - **Plant differences**:
-  - `bank_thrust_to_weight` is measured from a hover in ANGLE, as the hover throttle (reference.md has the method).
+  - Since 2026-10-19 there are no airframe settings: the drag rate is learned in flight from the five inch's value, and the thrust model is the five inch's 5.70, set high so the trim corrects it (see "Learned airframe").
   - 1S sags much more than the simulator's pack (see "Battery sag" below).
-  - The ducts change the rotor drag that the speed estimate and the ball are built on, including the side to front ratio behind the look-turn error. `bank_mid_speed` in g of drag will be a much lower real speed.
+  - The ducts change the rotor drag that the speed estimate and the ball are built on, including the side to front ratio behind the look-turn error. `bank_mid_speed` is in m/s since 2026-10-19, with the drag rate learned.
   - The accelerometer sees whoop vibration.
 - **Logs**: `debug_mode = BANK` to blackbox on 2 MB of onboard flash. `bank-log.js` and its `--replay` read only the simulator's CSV, so hardware logs need a blackbox CSV converter (not written yet) before they can be read and replayed the same way.
 

@@ -50,7 +50,7 @@ The file includes:
 aux 4 59 2 1700 2100 0 0              # BANK on AUX3 high (ANGLE is AUX3 middle, the bail-out)
 set debug_mode = BANK
 set blackbox_sample_rate = 1/16
-set bank_mid_speed = 10
+set bank_mid_speed = 50                # 5 m/s at the centre of the Speed stick, for indoors
 set runaway_takeoff_prevention = OFF
 ```
 
@@ -64,7 +64,7 @@ In the CLI:
 
 - `version` shows the commit noted in step 1.
 - `status` shows `BMI270`, `168MHz`, and `PLLR-HSI` (or `PLLR-HSE` if you left out `system_hse_mhz = 0`).
-- `get bank` lists `bank_thrust_to_weight`, `bank_head_check_range`, `bank_look_turn` and `bank_mid_speed`.
+- `get bank` lists `bank_mid_speed` and `bank_corner_rate` (since 2026-10-19 the drone's thrust to weight and drag rate are learned in flight, not set).
 
 In the App:
 

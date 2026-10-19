@@ -85,21 +85,41 @@ extern "C" {
     float bankUpdateThrustTrim(float trim, float measuredThrust, float modelThrust, bool mayBeOnGround, float dt);
     float bankLeakThrustTrim(float trim, float dt);
     float bankScaleTrimWithInflow(float trim, float inflow, float previousInflow);
-    void bankCompute(const bankModeConfig_t *config, const bankInputs_t *in, bankState_t *state, bankOutputs_t *out);
+    void bankLearnDragRate(bankLearned_t *learned, float forceForward, float forceLeft, float dragForward, float dragLeft,
+        float headingStep, bool learn, bool restart, float dt);
+    void bankCompute(const bankModeConfig_t *config, const bankInputs_t *in, bankState_t *state, bankLearned_t *learned, bankOutputs_t *out);
 }
 
 #include "gtest/gtest.h"
 
 static const float DEG = M_PI / 180.0f;
 
+// What bankCompute learns, cleared before every test, so each starts from the defaults.
+static bankLearned_t learned;
+
+class ClearLearned : public ::testing::EmptyTestEventListener {
+    void OnTestStart(const ::testing::TestInfo &) override { learned = {}; }
+};
+static const bool clearLearnedRegistered = (::testing::UnitTest::GetInstance()->listeners().Append(new ClearLearned), true);
+
 static float thrustToWeight(void)
 {
-    return bankModeConfig()->thrustToWeight / 100.0f;
+    return BANK_THRUST_TO_WEIGHT;
 }
 
 static float dragRate(void)
 {
-    return bankModeConfig()->dragRate / 100.0f;
+    return BANK_DRAG_RATE_DEFAULT;
+}
+
+// A learned drag rate to start from, as bankCompute sets the default.
+static bankLearned_t learnedFrom(float dragRateStart)
+{
+    bankLearned_t l = {};
+    l.dragRate = dragRateStart;
+    l.dragNum = dragRateStart * 0.05f;
+    l.dragDen = 0.05f;
+    return l;
 }
 
 static float hoverCollective(void)
@@ -121,7 +141,7 @@ static bankInputs_t centredInputs(void)
 static void computeN(bankInputs_t *in, bankState_t *state, bankOutputs_t *out, int n)
 {
     for (int i = 0; i < n; i++) {
-        bankCompute(bankModeConfig(), in, state, out);
+        bankCompute(bankModeConfig(), in, state, &learned, out);
     }
 }
 
@@ -451,7 +471,7 @@ TEST(BankModeTest, AClimbAcrossTiltedRotorsIsNotReadAsSlip)
     in.accX = -x;
     in.accY = -y;
     in.accZ = 1.0f / cosf(45.0f * DEG);
-    bankCompute(bankModeConfig(), &in, &state, &out);
+    bankCompute(bankModeConfig(), &in, &state, &learned, &out);
     // the drag is what the climb makes, so nothing is corrected: only the sideways force is integrated
     float forward;
     float left;
@@ -474,7 +494,7 @@ TEST(BankModeTest, TheVelocityTurnsBackAsTheNoseTurns)
     bankState_t probe = state;
     for (int i = 0; i < 50; i++) {
         probe.collective = 0.0f;
-        bankCompute(bankModeConfig(), &in, &probe, &out);
+        bankCompute(bankModeConfig(), &in, &probe, &learned, &out);
     }
     const float magnitude = sqrtf(sq(probe.velForward) + sq(probe.velLeft));
     EXPECT_LT(probe.velLeft, -0.5f * magnitude);
@@ -836,6 +856,181 @@ TEST(BankModeTest, DebugModeBankLogsTheEstimates)
         bankModeUpdate(now);
     }
     EXPECT_GT(debug[0], 150);           // speed estimate, 0.001 g
-    EXPECT_GT(debug[1], 0);             // corner speed
+    EXPECT_GT(debug[1], 0);             // learned drag rate, 0.001/s
+    debugMode = DEBUG_NONE;
+}
+
+// A speed swinging along the track (g s, speed / g) and the force that swings it, read as the learner sees them: the
+// drag is the true D times the speed, with a little noise.
+static void flySwingingSpeed(bankLearned_t *l, float trueDragRate, float amplitude, float seconds, bool learn)
+{
+    const float dt = 0.004f;
+    const float omega = 2.0f * M_PI / 3.0f;
+    bankLearnDragRate(l, 0.0f, 0.0f, trueDragRate, 0.0f, 0.0f, false, true, dt);
+    for (int i = 1; i < seconds / dt; i++) {
+        const float t = i * dt;
+        const float speed = 1.0f + amplitude * sinf(omega * t);
+        const float force = amplitude * omega * cosf(omega * t);
+        const float noise = 0.02f * sinf(97.0f * t) * cosf(31.0f * t);
+        bankLearnDragRate(l, force, 0.0f, trueDragRate * speed + noise, 0.0f, 0.0f, learn, false, dt);
+    }
+}
+
+TEST(BankModeTest, TheDragRateIsLearnedWhereTheSpeedChanges)
+{
+    for (const float start : { 0.2f, 1.0f }) {
+        bankLearned_t l = learnedFrom(start);
+        flySwingingSpeed(&l, 0.55f, 0.8f, 3.0f, true);
+        EXPECT_NE(start, l.dragRate);
+        flySwingingSpeed(&l, 0.55f, 0.8f, 30.0f, true);
+        EXPECT_NEAR(0.55f, l.dragRate, 0.02f) << "from " << start;
+    }
+}
+
+TEST(BankModeTest, ASteadyTurnTeachesTheDragRateToo)
+{
+    // the speed is steady along the track, which the heading follows; the sideways force turns it
+    bankLearned_t l = learnedFrom(0.2f);
+    const float dt = 0.004f;
+    const float turnRate = 1.5f;    // rad/s
+    const float speed = 1.0f;
+    bankLearnDragRate(&l, 0.0f, turnRate * speed, 0.6f * speed, 0.0f, 0.0f, false, true, dt);
+    for (int i = 0; i < 20.0f / dt; i++) {
+        bankLearnDragRate(&l, 0.0f, turnRate * speed, 0.6f * speed, 0.0f, turnRate * dt, true, false, dt);
+    }
+    EXPECT_NEAR(0.6f, l.dragRate, 0.03f);
+}
+
+TEST(BankModeTest, NothingIsLearnedOfTheDragRateWithoutAChangeOfSpeedOrWhenNotAllowed)
+{
+    bankLearned_t l = learnedFrom(dragRate());
+    // a hover, and a steady cruise
+    flySwingingSpeed(&l, 0.8f, 0.0f, 10.0f, true);
+    EXPECT_FLOAT_EQ(dragRate(), l.dragRate);
+    // a speed that changes, but by less than the excitation in a window
+    flySwingingSpeed(&l, 0.8f, 0.15f, 10.0f, true);
+    EXPECT_FLOAT_EQ(dragRate(), l.dragRate);
+    // a big change, while the conditions don't hold
+    flySwingingSpeed(&l, 0.8f, 0.8f, 10.0f, false);
+    EXPECT_FLOAT_EQ(dragRate(), l.dragRate);
+}
+
+TEST(BankModeTest, TheLearnedDragRateStaysInRangeAndImplausibleWindowsAreLeftOut)
+{
+    // windows that each say a D no airframe has (an impact, say) teach nothing
+    for (const float implausible : { 10.0f, 0.01f }) {
+        bankLearned_t l = learnedFrom(dragRate());
+        flySwingingSpeed(&l, implausible, 0.8f, 30.0f, true);
+        EXPECT_FLOAT_EQ(dragRate(), l.dragRate) << implausible;
+    }
+    // and near the ends of the range, the noise doesn't take it past them
+    bankLearned_t l = learnedFrom(dragRate());
+    flySwingingSpeed(&l, 2.98f, 0.8f, 30.0f, true);
+    EXPECT_LE(l.dragRate, 3.0f);
+    EXPECT_GT(l.dragRate, 2.8f);
+    l = learnedFrom(dragRate());
+    flySwingingSpeed(&l, 0.105f, 0.8f, 30.0f, true);
+    EXPECT_GE(l.dragRate, 0.1f);
+    EXPECT_LT(l.dragRate, 0.12f);
+}
+
+// A level craft with drag rate trueDragRate, and the thrust the collective gives, flown by bankCompute with the
+// attitude it asks for; the velocity is in g s. Returns the speed.
+static float flyLevelPlant(const bankInputs_t &sticks, bankState_t *state, bankOutputs_t *out, float trueDragRate, float *velocity, float seconds)
+{
+    bankInputs_t in = sticks;
+    in.dt = 0.004f;
+    for (int i = 0; i < seconds / in.dt; i++) {
+        const float pitch = out->pitchDeg * DEG;
+        const float thrust = bankThrustFromCollective(state->collective, thrustToWeight());
+        // rotor drag in the rotor plane, against the travel, growing as sqrt(thrust)
+        in.accX = -trueDragRate * cosf(pitch) * *velocity * sqrtf(fmaxf(thrust, 0.25f));
+        in.accZ = thrust;
+        in.measuredPitchDeg = out->pitchDeg;
+        in.measuredRollDeg = 0.0f;
+        bankCompute(bankModeConfig(), &in, state, &learned, out);
+        *velocity += (cosf(pitch) * in.accX + sinf(pitch) * in.accZ) * in.dt;
+    }
+    return *velocity;
+}
+
+TEST(BankModeTest, PunchesAndBrakesTeachTheDragRate)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    float velocity = 0.0f;
+    learned = learnedFrom(dragRate());
+    for (int i = 0; i < 6; i++) {
+        in.speed = 0.8f;
+        flyLevelPlant(in, &state, &out, 0.6f, &velocity, 3.0f);
+        in.speed = 0.0f;
+        flyLevelPlant(in, &state, &out, 0.6f, &velocity, 3.0f);
+    }
+    EXPECT_NEAR(0.6f, learned.dragRate, 0.06f);
+
+    // and nothing is learned disarmed, or with the motors saturated
+    learned = learnedFrom(dragRate());
+    in.motorsSaturated = true;
+    in.speed = 0.8f;
+    flyLevelPlant(in, &state, &out, 0.6f, &velocity, 3.0f);
+    in.speed = 0.0f;
+    flyLevelPlant(in, &state, &out, 0.6f, &velocity, 3.0f);
+    EXPECT_FLOAT_EQ(dragRate(), learned.dragRate);
+}
+
+TEST(BankModeTest, TheMidSpeedIsInMetresPerSecond)
+{
+    pgResetAll();
+    debugMode = DEBUG_BANK;
+    for (const uint16_t mid : { 120, 240 }) {
+        bankModeConfigMutable()->midSpeed = mid;
+        learned = learnedFrom(0.5f);
+        bankState_t state = {};
+        bankOutputs_t out = {};
+        bankInputs_t in = centredInputs();
+        in.speed = 0.5f;
+        // cruising at the mid speed (past the speed deadband): the drag reads it, and the force is the feedforward
+        const float speed = mid / 10.0f * 0.5f / 9.80665f;
+        state.velForward = speed + 0.02f;
+        in.accX = -state.velForward;
+        bankCompute(bankModeConfig(), &in, &state, &learned, &out);
+        EXPECT_NEAR(speed * 1000.0f, debug[3], 20.0f * speed) << "mid " << mid;   // within 2 %
+    }
+    debugMode = DEBUG_NONE;
+}
+
+TEST(BankModeTest, TheLearnedDragRateLastsThroughBankOffAndDisarming)
+{
+    setUpUpdate();
+    ENABLE_ARMING_FLAG(ARMED);
+    ENABLE_FLIGHT_MODE(BANK_MODE);
+    testThrottleStatus = THROTTLE_HIGH;
+    debugMode = DEBUG_BANK;
+    // punches and brakes on a level craft with a drag rate of 0.6, flying the attitude the mode asks for
+    const float trueDragRate = 0.6f;
+    float velocity = 0.0f;
+    timeUs_t now = 1000;
+    for (int i = 0; i < 3000; i++, now += 4000) {
+        rcCommand[THROTTLE] = (i / 750) % 2 == 0 ? 1800 : 1000;
+        const float pitch = bankModeGetAngleTarget(FD_PITCH) * DEG;
+        const float thrust = bankThrustFromCollective(bankModeGetCollective(), thrustToWeight());
+        const float accX = -trueDragRate * cosf(pitch) * velocity * sqrtf(fmaxf(thrust, 0.25f));
+        acc.accADC.x = accX * 512.0f;
+        acc.accADC.z = thrust * 512.0f;
+        attitude.raw[FD_PITCH] = lrintf(bankModeGetAngleTarget(FD_PITCH) * 10.0f);
+        bankModeUpdate(now);
+        velocity += (cosf(pitch) * accX + sinf(pitch) * thrust) * 0.004f;
+    }
+    const int learnedDragRate = debug[1];
+    EXPECT_NEAR(600, learnedDragRate, 90);
+
+    DISABLE_FLIGHT_MODE(BANK_MODE);
+    bankModeUpdate(now += 4000);
+    DISABLE_ARMING_FLAG(ARMED);
+    ENABLE_FLIGHT_MODE(BANK_MODE);
+    bankModeUpdate(now += 4000);
+    EXPECT_EQ(learnedDragRate, debug[1]);
     debugMode = DEBUG_NONE;
 }

@@ -186,8 +186,9 @@ Facts for putting it on this drone:
 - **Flashing:** step by step in [flashing.md](flashing.md).
 - **Mode:** BANK has permanent mode ID 59. It is on AUX3 high, so AUX3 middle (ANGLE) is the bail-out: `aux 4 59 2 1700 2100 0 0`.
 - **Settings:**
-  - `bank_thrust_to_weight` (x100, default 570, for the sim's 5-inch) must be measured for this drone. Hover in Angle with blackbox on and take c = (`rcCommand[3]` − 1000) / 1000 averaged over the hover; the setting is 100 / c^1.5.
-  - `bank_mid_speed` (x100 g of drag, default 50): lower it (e.g. 10) for the first flights.
+  - No airframe settings since 2026-10-19. The drag rate is learned in flight from the sim's five inch value (0.40) and relearned at every power-up. The thrust model is the five inch's fixed 5.70, set high on purpose: the thrust trim corrects a value too high fully.
+  - `bank_mid_speed` (x10 m/s, default 120 = 12 m/s): 50 (5 m/s) for the first indoor flights.
+  - `bank_corner_rate` (deg/s, default 300): untuned.
   - `set debug_mode = BANK`. Set `blackbox_sample_rate` low enough for the 2 MB flash.
 - **Safety facts found in the code:**
   - In BANK, motor power comes from the Lift stick: at the centre it is hover power, armed or not. With BANK on, arming needs both the throttle (Speed) stick and the right stick (Lift) fully down (`core.c`, `updateArmingStatus()`; since 2026-10-18, not bench tested yet). Armed that way the motors still spin at the Lift floor (about 11 % collective), not idle. Until the bench test confirms it, keep arming, taking off and landing in ANGLE.
@@ -225,35 +226,22 @@ The steps (build, flash, restore the settings, checks) are in [flashing.md](flas
 aux 4 59 2 1700 2100 0 0
 set debug_mode = BANK
 set blackbox_sample_rate = 1/16
-set bank_mid_speed = 10
+set bank_mid_speed = 50
 set runaway_takeoff_prevention = OFF
 ```
-
-Add `set bank_thrust_to_weight = <measured>` once it has been measured (see "Measuring `bank_thrust_to_weight`").
 
 **Reminder: runaway takeoff.** Keep it off (above) until the firmware is fixed. In BANK it can disarm the drone in mid-air. The check switches itself off once the throttle *stick* has been above 20 % (with a stick deflected) for 0.5 s, or above 40 %. In BANK that stick is Speed, not the motor power (`core.c`, `calculateThrottlePercentAbs()`). After a launch in BANK, with Speed in the lower half, the check stays on all flight. It then disarms whenever a PID sum passes 60 % for 75 ms while the craft is rotating: a hard Bank entry, a hard brake or a touch on a wall. Under BANK, airmode's start latch (`airmode_start_throttle_percent = 25`) reads the same stick. The fix is to use the collective as the throttle percent under BANK in both places (open in `project_plan.md`, "Real hardware"). Once the fix is in, set it back `ON`.
 
 About the logging rate: bank mode updates once per RX frame, about 250 Hz with this ELRS link, so logging at 1/16 (200 Hz from the 3.2 kHz loop) captures it while stretching the 2 MB flash. How many minutes that holds is an estimate; check it on the first flight. Use 1/4 or higher only for a gyro or PID question.
 
-### Measuring `bank_thrust_to_weight`
+### No airframe settings: the first flight learns
 
-1. Fly ANGLE (not BANK) on a fresh pack with blackbox logging.
-2. Hover steadily for 10 to 15 s, after the first few seconds.
-3. Average `rcCommand[3]` over the hover, and take c = (average − 1000) / 1000.
-4. `bank_thrust_to_weight` = round(100 / c^1.5). For example, c = 0.35 gives 483.
+Since 2026-10-19 nothing is measured before flying (`project_plan.md`, "Learned airframe").
 
-Why this works:
-- Outside BANK, the mixer's throttle is `rcCommand[THROTTLE] − 1000` plus the throttle angle correction (`thr_corr_value`, default 0 and unchanged here).
-- In BANK, the collective × 1000 replaces exactly that term (`mixer.c`).
-- So the hover throttle in ANGLE is the collective BANK needs for 1 g, and the mode's model is thrust = T/W × collective^1.5.
-- `thr_mid`/`thr_expo` are at their defaults (50/0), so the throttle is linear. The Speed stick reads the same `rcCommand[THROTTLE]`, so a throttle curve would reshape Speed too.
-- BANK's reverse is the raw throttle below `min_check` (1050), so the radio's throttle low endpoint must reach well below it (ELRS's 988 to 1000 is fine). The stop is a band over the next 10 % above it.
-
-Telling whether the value is right, once flying BANK:
-- **Set too low:** the drone climbs at centre Lift right after take-off.
-- **Set too high:** it sinks, and the thrust trim (`debug[2]`) settles below 1000.
-
-1S sag lowers the real T/W through the pack. `vbat_sag_compensation` is the candidate fix, listed in `project_plan.md`.
+- **Drag rate** (`debug[1]`, 0.001 1/s): starts at 400 and is learned wherever the speed changes with little vertical speed: punches, brakes and turns. A few level punches and brakes settle it. It lasts until power-off, through disarming and BANK switching off.
+- **Thrust to weight:** fixed at 5.70, with the thrust trim (`debug[2]`, 1000 = model right) correcting it in flight. If the Air65's real value is lower, the trim settles below 1000 and the drone needs a little more than centre Lift to leave the ground. If it is higher than 5.70, the drone climbs at centre Lift right after take-off, and the trim corrects that only partly.
+- The hover-throttle check, if the trim looks far off: hover in ANGLE, take c = (`rcCommand[3]` − 1000) / 1000 averaged over the hover; the real T/W is 1 / c^1.5.
+- 1S sag lowers the real T/W through the pack; the trim follows it.
 
 ### Bench test, props off (expected results from the code; verify each)
 
@@ -281,13 +269,15 @@ The throttle-low, auto-disarm, runaway takeoff and failsafe "landed" hooks under
 | Field | Meaning | Unit |
 |---|---|---|
 | `debug[0]` | Speed estimate | 0.001 g of drag |
-| `debug[1]` | Target speed | 0.001 g of drag |
-| `debug[2]` | Thrust trim | 0.001 (1000 = model right) |
+| `debug[1]` | Learned drag rate D | 0.001 1/s |
+| `debug[2]` | Thrust trim | 0.001 (1000 = learned model right) |
 | `debug[3]` | Forward force command | 0.001 g |
-| `debug[4]` | Thrust to weight in use | 0.01 |
-| `debug[5]` | Turn feedforward | 0.1 deg/s |
-| `debug[6]` | Ball (slip) | 0.001 g |
+| `debug[4]` | Sideways force command | 0.001 g |
+| `debug[5]` | Slip, the track's angle from the nose | 0.1 deg |
+| `debug[6]` | Turn feedforward | 0.1 deg/s |
 | `debug[7]` | Vertical force command minus 1 g | 0.001 g |
+
+  The speed in m/s is `debug[0]` × 9.81 / `debug[1]`.
 
 - **Sim tools:** the simulator's `npm run bank:log` and `--replay` read the sim's own CSV logs only, not blackbox. A converter (blackbox CSV to the sim log format) is needed before hardware flights can be summarised or replayed that way. As of 2026-10-18 it does not exist.
 

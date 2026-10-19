@@ -28,12 +28,10 @@
 
 #include "bank_mode.h"
 
-PG_REGISTER_WITH_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig, PG_BANK_MODE_CONFIG, 6);
+PG_REGISTER_WITH_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig, PG_BANK_MODE_CONFIG, 7);
 
 PG_RESET_TEMPLATE(bankModeConfig_t, bankModeConfig,
-                  .thrustToWeight = 570,
-                  .midSpeed = 50,
-                  .dragRate = 40,
+                  .midSpeed = 120,
                   .cornerRate = 300,
                   );
 

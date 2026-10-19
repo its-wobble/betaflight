@@ -57,15 +57,39 @@ typedef struct bankOutputs_s {
     bool throttleLow;           // Lift stick at the bottom, or no collective
 } bankOutputs_t;
 
+// The airframe the mode starts from, the simulator's five inch.
+#ifndef BANK_DRAG_RATE_DEFAULT
+#define BANK_DRAG_RATE_DEFAULT          0.40f   // 1/s, learned in flight from here
+#endif
+// The thrust model's full-collective thrust / weight, high on purpose: the thrust trim corrects a value too high fully,
+// one too low only partly.
+#ifndef BANK_THRUST_TO_WEIGHT
+#define BANK_THRUST_TO_WEIGHT           5.70f
+#endif
+
+// Learned in flight and kept until power-off, through disarming and BANK switching off.
+typedef struct bankLearned_s {
+    float dragRate;             // D, 1/s: rotor drag at 1 g of thrust (g of drag) = D * airspeed / g; 0 = not started
+    float dragNum;              // least squares sums, slowly forgotten: D = dragNum / dragDen
+    float dragDen;
+    float force[2];             // horizontal specific force in the heading frame (forward, left), filtered as the drag is, g
+    float drag[2];              // the rotor drag read as a level velocity, filtered, g of drag
+    float windowForce[2];       // the force integrated since the window started, g s
+    float windowDrag[2];        // the drag at the window's start
+    float windowTime;           // s
+    bool windowOk;              // the conditions for learning have held since the window started
+} bankLearned_t;
+
 typedef struct bankState_s {
     float velForward;           // velocity in the heading frame, g of drag
     float velLeft;
     float velUp;
     float dragLift;             // vertical part of the drag in the rotor plane, filtered, g
     float verticalForce;        // measured vertical specific force, filtered, g
+    float climbRate;            // vertical speed from the vertical force alone, slowly forgotten, g s
     float liftIntegral;         // vertical thrust the vertical force loop adds, g
     float collective;           // previous update's collective
-    float thrustTrim;           // factor on the modelled thrust, 1 = as bank_thrust_to_weight says
+    float thrustTrim;           // factor on the modelled thrust, 1 = as BANK_THRUST_TO_WEIGHT says
     float budgetTrim;           // the trim, filtered slowly, for the thrust the vector is shared out of
     float trimModelThrust;      // modelled thrust, lagged like the motors, g
     float trimInflow;           // inflow through the props the trim was measured at, g of drag
