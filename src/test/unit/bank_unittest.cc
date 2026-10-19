@@ -443,9 +443,31 @@ TEST(BankModeTest, BankRightRollsRightAndSpeedPitchesForward)
     bankInputs_t in = centredInputs();
     in.roll = 0.5f;
     in.speed = 0.75f;
+    in.accX = -0.5f;    // drag of travelling forward, so the banked turn is in
     computeN(&in, &state, &out, 10);
     EXPECT_GT(out.rollDeg, 30.0f);
     EXPECT_GT(out.pitchDeg, 10.0f);
+}
+
+TEST(BankModeTest, BankAtZeroSpeedYawsOnTheSpotWithoutTilt)
+{
+    pgResetAll();
+    bankState_t state = {};
+    bankOutputs_t out = {};
+    bankInputs_t in = centredInputs();
+    in.roll = 1.0f;     // Bank right
+    computeN(&in, &state, &out, 10);
+    EXPECT_LT(out.yawRateDps, -100.0f);     // clockwise
+    EXPECT_NEAR(0.0f, out.rollDeg, 1e-3f);
+    EXPECT_NEAR(0.0f, out.pitchDeg, 1e-3f);
+
+    in.roll = -1.0f;
+    computeN(&in, &state, &out, 10);
+    EXPECT_GT(out.yawRateDps, 100.0f);
+
+    in.lift = 0.0f;     // Lift at the bottom: nothing turns
+    computeN(&in, &state, &out, 10);
+    EXPECT_FLOAT_EQ(0.0f, out.yawRateDps);
 }
 
 TEST(BankModeTest, TheHeadCheckTurnsTheNoseButNotTheThrustInTheWorld)
@@ -705,7 +727,7 @@ TEST(BankModeTest, EngagedWithTheThrottleLowNoTiltUntilTheBankStickIsCentred)
     now += 10000;
     testDeflection[FD_YAW] = -1.0f;
     bankModeUpdate(now);
-    EXPECT_GT(bankModeGetAngleTarget(FD_ROLL), 0.0f);
+    EXPECT_LT(bankModeGetYawRate(), 0.0f);
 }
 
 TEST(BankModeTest, YawStickBanksAndRollStickTurnsTheNose)
@@ -716,7 +738,7 @@ TEST(BankModeTest, YawStickBanksAndRollStickTurnsTheNose)
     bankModeUpdate(1000);
     testDeflection[FD_YAW] = -1.0f;
     bankModeUpdate(11000);
-    EXPECT_GT(bankModeGetAngleTarget(FD_ROLL), 0.0f);
+    EXPECT_LT(bankModeGetYawRate(), 0.0f);      // at zero Speed Bank yaws on the spot
 
     // with the Speed stick at the bottom the head check alone gives no tilt
     setUpUpdate();
@@ -756,7 +778,7 @@ TEST(BankModeTest, UpdateMirrorsTheModeFlagAndClearsWhenInactive)
 
     testDeflection[FD_YAW] = -1.0f;     // yaw stick right = bank right
     bankModeUpdate(12000);
-    EXPECT_GT(bankModeGetAngleTarget(FD_ROLL), 0.0f);
+    EXPECT_LT(bankModeGetYawRate(), 0.0f);
 
     DISABLE_FLIGHT_MODE(BANK_MODE);
     bankModeUpdate(22000);

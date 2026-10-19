@@ -61,7 +61,7 @@
  *             half a forward force up to what the thrust allows. Below min_check a small reverse, once the stick has
  *             been raised since arming.
  *   pitch     Lift: BANK_LIFT_FLOOR at the bottom, 1 g at the centre, all the thrust at the top
- *   yaw       Bank: bank angle, the turn follows from it
+ *   yaw       Bank: bank angle, the turn follows from it; at zero Speed a yaw rate instead, as in angle mode
  *   roll      head check: nose offset from the direction of travel, springs back at the centre
  *
  * The sticks set a thrust vector in the travel frame (x forward along the track, r to the right, z up):
@@ -108,6 +108,7 @@
 #define BANK_TURN_MIN_SPEED     0.1f    // g of drag, the turn feedforward fades out below this
 #define BANK_TURN_RATE_SHARE    0.6f    // share of the yaw limit the feedforward may use, the rest is the ball's
 #define BANK_TURN_MAX_BANK_DEG  85.0f
+#define BANK_HOVER_YAW_RATE     (BANK_TURN_RATE_SHARE * BANK_YAW_MAX_RATE)   // deg/s at full Bank stick and zero Speed
 #define BANK_BALL_KP            600.0f  // deg/s per g
 #define BANK_BALL_KI            600.0f  // deg/s per g per s
 #define BANK_TRIM_MIN_TILT_COS  0.25f   // no trim measurement past 75 deg of tilt
@@ -376,6 +377,9 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
         speedStick -= BANK_REVERSE_STICK * constrainf(in->reverse, 0.0f, 1.0f);
     }
     const float headStick = bankShapeStick(in->yaw);
+    // at zero Speed there is no track to bank into: the Bank stick yaws on the spot, and hands over to the banked turn
+    // as the Speed passes BANK_TURN_MIN_SPEED
+    const float hoverShare = 1.0f - constrainf(fabsf(speed) / BANK_TURN_MIN_SPEED, 0.0f, 1.0f);
     // the Lift stick springs back to the centre, so it gets the deadband there
     const float liftStick = 0.5f * (bankShapeStick(2.0f * in->lift - 1.0f) + 1.0f);
 
@@ -389,7 +393,7 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     const float forwardForce = bankSpeedForce(speedStick, speed, midSpeed, horizontal);
     float forward;
     float right;
-    bankThrustVector(liftForTilt, horizontal, bankStick, forwardForce, &forward, &right);
+    bankThrustVector(liftForTilt, horizontal, bankStick * (1.0f - hoverShare), forwardForce, &forward, &right);
 
     // the collective is set for the measured tilt, so Lift is right while the craft rotates to the target, but never
     // for more than the tilt budget, so an overshoot can't take it to full. No thrust inverted.
@@ -399,7 +403,7 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     state->collective = collective;
 
     // nose offset: the look into the turn plus the head check, slewed
-    const float offsetTarget = bankLookIntoTurnOffset(bankStick, speedStick) * (config->lookTurn / 100.0f)
+    const float offsetTarget = bankLookIntoTurnOffset(bankStick, speedStick) * (1.0f - hoverShare) * (config->lookTurn / 100.0f)
         + headStick * DEGREES_TO_RADIANS(config->headCheckRange);
     const float maxStep = DEGREES_TO_RADIANS(BANK_NOSE_SLEW_RATE) * dt;
     const float offsetStep = constrainf(offsetTarget - state->noseOffset, -maxStep, maxStep);
@@ -415,13 +419,15 @@ STATIC_UNIT_TESTED void bankCompute(const bankModeConfig_t *config, const bankIn
     const float ballYaw = ball * constrainf(fabsf(speed) / BANK_TURN_MIN_SPEED, 0.0f, 1.0f);
     float turnRateDps = 0.0f;
     float ballRateDps = 0.0f;
+    float hoverYawDps = 0.0f;
     if (liftStick > 0.0f) {
         const float maxBankTan = tanf(DEGREES_TO_RADIANS(BANK_TURN_MAX_BANK_DEG));
         const float heldBankTan = constrainf(heldRight / fmaxf(tiltCos, 1e-3f), -maxBankTan, maxBankTan);
         turnRateDps = bankTurnFeedforward(heldBankTan, speed);
         ballRateDps = BANK_BALL_KP * ballYaw;
+        hoverYawDps = -bankStick * hoverShare * BANK_HOVER_YAW_RATE;
     }
-    const float yawRateDps = turnRateDps + ballRateDps + state->ballIntegral + RADIANS_TO_DEGREES(offsetStep / dt);
+    const float yawRateDps = turnRateDps + ballRateDps + hoverYawDps + state->ballIntegral + RADIANS_TO_DEGREES(offsetStep / dt);
     // the integral takes out what the feedforward's fixed turn gain misses, so the nose holds the track; only in a
     // turn, and not deeper into the yaw limit
     if (bankStick == 0.0f || liftStick <= 0.0f) {
